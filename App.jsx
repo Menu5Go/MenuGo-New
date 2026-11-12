@@ -452,7 +452,7 @@ export default function App() {
     popup.document.write(`<html lang="ar" dir="rtl"><head><title>رمز الطاولة</title><style>body{font-family:Tahoma,Arial,sans-serif;text-align:center;padding:30px}img{width:320px;max-width:90%}</style></head><body><h2>${String(table.table_name).replace(/[&<>"]/g, '')}</h2><img src="${image}"/><script>window.onload=()=>window.print()<\/script></body></html>`)
     popup.document.close()
   }
-  const loadReviews = async () => {
+  const loadReviews = async ({ showSuccess = false } = {}) => {
     if (reviewsLoading) return
     if (!supabase || !allowedOwner) {
       notify('تعذر تحديث التقييمات: يلزم الاتصال بقاعدة البيانات وتسجيل الدخول بصلاحية المدير.', 'error')
@@ -470,7 +470,7 @@ export default function App() {
         return
       }
       setReviews(data || [])
-      notify('تم تحديث التقييمات بنجاح.')
+      if (showSuccess) notify('تم تحديث التقييمات بنجاح.')
     } catch (error) {
       notify(`تعذر تحميل التقييمات: ${error?.message || 'خطأ غير متوقع'}`, 'error')
     } finally {
@@ -986,11 +986,12 @@ export default function App() {
     if (unavailableCartItems().length) return notify('يوجد منتج غير متوفر في السلة. احذفه قبل إرسال الطلب.', 'error')
     if (!settings.whatsapp_enabled) return notify('الطلب عبر واتساب غير متاح حالياً')
     if (!cart.length) return notify('السلة فارغة')
+    const whatsappMoney = value => `${new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(Number(value || 0))} ليرة`
     const lines = cart.map((x, index) =>
-      `${index + 1}) ${x.name}\\nالعدد: ${x.quantity}\\nسعر القطعة: ${money(x.price, settings.currency)}\\nإجمالي الصنف: ${money(x.price * x.quantity, settings.currency)}`
+      `${index + 1}. ${x.name} × ${x.quantity} = ${whatsappMoney(x.price * x.quantity)}`
     )
-    if (extraFeeAmount > 0) lines.push(`${extraFeeLabel}\\nالعدد: 1\\nالقيمة: ${money(extraFeeAmount, settings.currency)}`)
-    const message = `طلب جديد من ${settings.restaurant_name || 'المطعم'}\\n\\nتفاصيل الطلب:\\n${lines.join('\\n\\n')}\\n\\nالمجموع النهائي: ${money(total, settings.currency)}\\nملاحظات: ${orderNote.trim() || 'لا يوجد'}`
+    if (extraFeeAmount > 0) lines.push(`${extraFeeLabel} = ${whatsappMoney(extraFeeAmount)}`)
+    const message = `طلب جديد من ${settings.restaurant_name || 'المطعم'}\n\n${lines.join('\n')}\n\nالإجمالي النهائي = ${whatsappMoney(total)}\nملاحظات: ${orderNote.trim() || 'لا يوجد'}`
     const url = whatsappUrl(settings.whatsapp_number, message)
     if (!url) return notify('أضف رقم واتساب صحيحاً من إعدادات المطعم')
     window.open(url, '_blank', 'noopener,noreferrer')
@@ -1211,7 +1212,7 @@ export default function App() {
       <section id="orders-panel" className={`admin-panel ${activeAdminSection==='orders'?'admin-panel-active':'admin-panel-hidden'}`}><div className="panel-title"><ClipboardList/><div><h3>إدارة الطلبات</h3><p>طلباتك مرتبة حسب الحالة، مع تحديث سريع من البطاقة مباشرة.</p></div><button className="outline-btn admin-refresh-btn" onClick={loadOrders} disabled={ordersLoading} aria-busy={ordersLoading}>{ordersLoading?<><span className="refresh-spinner" aria-hidden="true"/>جارٍ التحديث</>:"تحديث"}</button></div>
         {orders.length ? <div className="orders-status-groups">{[['new','جديدة'],['preparing','قيد التحضير'],['ready','جاهزة'],['completed','مكتملة'],['cancelled','ملغاة']].map(([status,label])=>{const group=orders.filter(order=>(order.status||'new')===status);return <section className={`orders-status-group group-${status}`} key={status}><header><span className={`order-status status-${status}`}>{label}</span><b>{group.length}</b></header>{group.length?group.map(order=><article className="order-card order-management-card" key={order.id}><div className="order-card-heading"><div><b>طلب #{order.order_number || String(order.id).slice(0,8)}{order.table_name ? ` · ${order.table_name}` : ''}</b><small>{new Date(order.created_at).toLocaleString('ar')}</small></div><strong>{money(order.total,settings.currency)}</strong></div><div className="order-items-list">{(order.items||[]).map((item,index)=><span key={`${order.id}-${index}`}>{arabicValue(item.name)||'منتج'} <b>× {item.quantity}</b></span>)}</div>{order.notes&&<p className="order-customer-note">ملاحظة: {order.notes}</p>}{settings.order_status_enabled!==false&&<div className="order-quick-actions">{status==='new'&&<button disabled={updatingOrderId===order.id} onClick={()=>changeOrderStatus(order.id,'preparing')}>قبول وبدء التحضير</button>}{status==='preparing'&&<button disabled={updatingOrderId===order.id} onClick={()=>changeOrderStatus(order.id,'ready')}>تحديد كجاهز</button>}{status==='ready'&&<button disabled={updatingOrderId===order.id} onClick={()=>changeOrderStatus(order.id,'completed')}>إكمال الطلب</button>}{!['completed','cancelled'].includes(status)&&<button className="order-cancel-action" disabled={updatingOrderId===order.id} onClick={()=>setConfirmDialog({title:'تأكيد إلغاء الطلب',message:`هل أنت متأكد من إلغاء الطلب #${order.order_number || String(order.id).slice(0,8)}؟ لن يُلغى الطلب إلا بعد تأكيدك.`,confirmLabel:'نعم، ألغِ الطلب',onConfirm:()=>changeOrderStatus(order.id,'cancelled')})}>إلغاء الطلب</button>}{updatingOrderId===order.id&&<small>جارٍ تحديث الحالة...</small>}</div>}</article>):<p className="orders-group-empty">لا توجد طلبات {label.toLowerCase()} حالياً.</p>}</section>})}</div> : <p className="muted">لا توجد طلبات داخلية حتى الآن.</p>}
       </section>
-      <section id="reviews-panel" className={`admin-panel ${activeAdminSection==='reviews'?'admin-panel-active':'admin-panel-hidden'}`}><div className="panel-title"><Star/><div><h3>تقييمات المنتجات (خاصة بالمدير)</h3><p>لا تظهر التقييمات أو متوسطاتها للزوار</p></div><button className="outline-btn admin-refresh-btn" onClick={loadReviews} disabled={reviewsLoading} aria-busy={reviewsLoading}>{reviewsLoading?<><span className="refresh-spinner" aria-hidden="true"/>جارٍ التحديث</>:"تحديث"}</button></div>
+      <section id="reviews-panel" className={`admin-panel ${activeAdminSection==='reviews'?'admin-panel-active':'admin-panel-hidden'}`}><div className="panel-title"><Star/><div><h3>تقييمات المنتجات (خاصة بالمدير)</h3><p>لا تظهر التقييمات أو متوسطاتها للزوار</p></div><button className="outline-btn admin-refresh-btn" onClick={()=>loadReviews({ showSuccess: true })} disabled={reviewsLoading} aria-busy={reviewsLoading}>{reviewsLoading?<><span className="refresh-spinner" aria-hidden="true"/>جارٍ التحديث</>:"تحديث"}</button></div>
         {reviews.map(r=><article className="order-card" key={r.product_id}><h4>{localized(products.find(p=>p.id===r.product_id), 'name') || 'منتج'}</h4><b>★ {r.average_rating} / 5 · {r.review_count} تقييم</b>{(r.reviews||[]).map(item=><p key={item.id}>{'★'.repeat(item.rating)} {item.comment || 'دون تعليق'} <small>{new Date(item.created_at).toLocaleString('ar')}</small></p>)}</article>)}
         {!reviews.length&&<p className="muted">لا توجد تقييمات بعد.</p>}
       </section>
