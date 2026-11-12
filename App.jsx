@@ -21,7 +21,8 @@ const initialSettings = {
   whatsapp_enabled: false, whatsapp_number: '', contact_whatsapp_enabled: false, contact_whatsapp_number: '', internal_orders_enabled: false,
   order_sound_enabled: false, order_status_enabled: true,
   facebook_enabled: false, facebook_url: '', instagram_enabled: false, instagram_url: '',
-  restaurant_address: '', restaurant_location_url: '', restaurant_latitude: '', restaurant_longitude: '',
+  restaurant_address: '', restaurant_location_enabled: false, restaurant_location_url: '',
+  distance_calculation_enabled: false, restaurant_latitude: '', restaurant_longitude: '',
   primary_color: '#1d4738', logo_url: '', cover_url: ''
 }
 const emptyProduct = { name: '', name_ar: '', description: '', description_ar: '', price: '', category_id: '', image_url: '', is_available: true, is_featured: false }
@@ -78,42 +79,14 @@ const validCoordinates = (latValue, lonValue) => {
   return { lat, lon }
 }
 
-const coordinatesFromMapLink = (value) => {
-  const raw = String(value || '').trim()
-  if (!raw) return null
-  let decoded = raw
-  try { decoded = decodeURIComponent(raw) } catch { /* inspect the original URL */ }
-  const patterns = [
-    /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/i,
-    /@(-?\d+(?:\.\d+)?),\s*(-?\d+(?:\.\d+)?)/i,
-    /[?&](?:q|query|destination|ll|center)=(-?\d+(?:\.\d+)?)(?:,|%2c)(-?\d+(?:\.\d+)?)/i,
-    /^\s*(-?\d{1,2}\.\d{3,})\s*,\s*(-?\d{1,3}\.\d{3,})\s*$/
-  ]
-  for (const pattern of patterns) {
-    const match = decoded.match(pattern)
-    if (match) {
-      const coordinates = validCoordinates(match[1], match[2])
-      if (coordinates) return coordinates
-    }
-  }
-  return null
-}
-
 const restaurantCoordinates = (settings) => {
   const rawLat = settings?.restaurant_latitude
   const rawLon = settings?.restaurant_longitude
-  if (rawLat !== '' && rawLat != null && rawLon !== '' && rawLon != null) {
-    const coordinates = validCoordinates(rawLat, rawLon)
-    if (coordinates) return coordinates
-  }
-  return coordinatesFromMapLink(settings?.restaurant_location_url)
+  if (rawLat === '' || rawLat == null || rawLon === '' || rawLon == null) return null
+  return validCoordinates(rawLat, rawLon)
 }
 
 const restaurantMapUrl = (settings) => {
-  const coordinates = restaurantCoordinates(settings)
-  if (coordinates) {
-    return `https://www.google.com/maps/search/?api=1&query=${coordinates.lat},${coordinates.lon}`
-  }
   const raw = String(settings?.restaurant_location_url || '').trim()
   if (raw) {
     try {
@@ -157,6 +130,7 @@ export default function App() {
   const [reviewsNotificationDismissed, setReviewsNotificationDismissed] = useState(() => readNotificationDismissed('reviews'))
   const [ordersNotificationDismissed, setOrdersNotificationDismissed] = useState(() => readNotificationDismissed('orders'))
   const [reviewsLoading, setReviewsLoading] = useState(false)
+  const [ordersLoading, setOrdersLoading] = useState(false)
   const [reviewDraft, setReviewDraft] = useState({ product: null, rating: 5, comment: '' })
   const [uploading, setUploading] = useState(false)
   const [categories, setCategories] = useState(() => supabase ? [] : demoCategories)
@@ -303,11 +277,23 @@ export default function App() {
   }, [page, session])
 
   const loadOrders = async () => {
-    if (!supabase || !allowedOwner) return
-    const { data, error } = await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(200)
-    if (error) return notify(`تعذر تحميل الطلبات: ${error.message}`)
-    setOrders(data || [])
-    seenOrderIdsRef.current = new Set((data || []).map(order => order.id))
+    if (!supabase || !allowedOwner || ordersLoading) return
+    setOrdersLoading(true)
+    try {
+      const { data, error } = await supabase.from('orders').select('*').order('created_at', { ascending: false }).limit(200)
+      if (error) {
+        notify(`تعذر تحميل الطلبات: ${error.message}`, 'error')
+        return false
+      }
+      setOrders(data || [])
+      seenOrderIdsRef.current = new Set((data || []).map(order => order.id))
+      return true
+    } catch (error) {
+      notify(`تعذر تحميل الطلبات: ${error?.message || 'خطأ غير متوقع'}`, 'error')
+      return false
+    } finally {
+      setOrdersLoading(false)
+    }
   }
 
   // إحصائيات مستقلة عن قائمة آخر 200 طلب، مع احترام اليوم حسب توقيت جهاز مدير المطعم.
@@ -414,22 +400,32 @@ export default function App() {
   }, [page, session])
 
   const loadRestaurantTables = async () => {
-    if (!supabase || !allowedOwner) return
+    if (!supabase || !allowedOwner || tableLoading) return
     setTableLoading(true)
-    const { data, error } = await supabase.from('restaurant_tables').select('*').order('is_general', { ascending: false }).order('created_at')
-    setTableLoading(false)
-    if (error) return notify(`تعذر تحميل رموز الطاولات: ${error.message}`)
-    setRestaurantTables(data || [])
-    const QRCode = (await import('qrcode')).default
-    const baseUrl = import.meta.env.VITE_PUBLIC_MENU_URL || new URL(import.meta.env.BASE_URL || '/', window.location.origin).toString()
-    const images = {}
-    for (const table of (data || [])) {
-      const url = new URL(baseUrl, window.location.origin)
-      url.searchParams.set('source', 'qr')
-      url.searchParams.set('table', table.qr_token)
-      images[table.id] = await QRCode.toDataURL(url.toString(), { width: 420, margin: 2 })
+    try {
+      const { data, error } = await supabase.from('restaurant_tables').select('*').order('is_general', { ascending: false }).order('created_at')
+      if (error) {
+        notify(`تعذر تحميل رموز الطاولات: ${error.message}`, 'error')
+        return false
+      }
+      setRestaurantTables(data || [])
+      const QRCode = (await import('qrcode')).default
+      const baseUrl = import.meta.env.VITE_PUBLIC_MENU_URL || new URL(import.meta.env.BASE_URL || '/', window.location.origin).toString()
+      const images = {}
+      for (const table of (data || [])) {
+        const url = new URL(baseUrl, window.location.origin)
+        url.searchParams.set('source', 'qr')
+        url.searchParams.set('table', table.qr_token)
+        images[table.id] = await QRCode.toDataURL(url.toString(), { width: 420, margin: 2 })
+      }
+      setTableQrImages(images)
+      return true
+    } catch (error) {
+      notify(`تعذر تحميل رموز الطاولات: ${error?.message || 'خطأ غير متوقع'}`, 'error')
+      return false
+    } finally {
+      setTableLoading(false)
     }
-    setTableQrImages(images)
   }
   const addRestaurantTable = async () => {
     const name = tableDraft.trim()
@@ -609,26 +605,36 @@ export default function App() {
   }
 
   const loadAnalytics = async () => {
-    if (!supabase) return
+    if (!supabase || analyticsLoading) return
     setAnalyticsLoading(true)
-    const { data, error } = await supabase.rpc('get_menu_analytics')
-    setAnalyticsLoading(false)
-    if (error) return notify(`تعذر تحميل الإحصائيات: ${error.message}`)
-    const stats = data || {}
-    const daily = (stats.daily || []).map(item => ({
-      label: new Date(`${item.day}T12:00:00`).toLocaleDateString('ar', { weekday: 'short', day: 'numeric' }),
-      visits: Number(item.visits || 0)
-    }))
-    const topProducts = (stats.top_products || []).map(item => ({
-      name: products.find(p => p.id === item.product_id) ? localized(products.find(p => p.id === item.product_id), 'name') : 'منتج محذوف',
-      views: Number(item.views || 0)
-    }))
-    setAnalytics({
-      visitors: Number(stats.visitors || 0), visits: Number(stats.visits || 0),
-      qrVisitors: Number(stats.qr_visitors || 0), qrScans: Number(stats.qr_scans || 0),
-      directVisits: Number(stats.direct_visits || 0), productViews: Number(stats.product_views || 0),
-      daily, topProducts
-    })
+    try {
+      const { data, error } = await supabase.rpc('get_menu_analytics')
+      if (error) {
+        notify(`تعذر تحميل الإحصائيات: ${error.message}`, 'error')
+        return false
+      }
+      const stats = data || {}
+      const daily = (stats.daily || []).map(item => ({
+        label: new Date(`${item.day}T12:00:00`).toLocaleDateString('ar', { weekday: 'short', day: 'numeric' }),
+        visits: Number(item.visits || 0)
+      }))
+      const topProducts = (stats.top_products || []).map(item => ({
+        name: products.find(p => p.id === item.product_id) ? localized(products.find(p => p.id === item.product_id), 'name') : 'منتج محذوف',
+        views: Number(item.views || 0)
+      }))
+      setAnalytics({
+        visitors: Number(stats.visitors || 0), visits: Number(stats.visits || 0),
+        qrVisitors: Number(stats.qr_visitors || 0), qrScans: Number(stats.qr_scans || 0),
+        directVisits: Number(stats.direct_visits || 0), productViews: Number(stats.product_views || 0),
+        daily, topProducts
+      })
+      return true
+    } catch (error) {
+      notify(`تعذر تحميل الإحصائيات: ${error?.message || 'خطأ غير متوقع'}`, 'error')
+      return false
+    } finally {
+      setAnalyticsLoading(false)
+    }
   }
 
   useEffect(() => {
@@ -797,11 +803,15 @@ export default function App() {
     const rawLon = settings.restaurant_longitude
     const hasLat = rawLat !== '' && rawLat != null
     const hasLon = rawLon !== '' && rawLon != null
-    if (hasLat !== hasLon) return notify('أدخل خط العرض وخط الطول معاً')
+    if (settings.distance_calculation_enabled && hasLat !== hasLon) return notify('أدخل خط العرض وخط الطول معاً لتفعيل حساب المسافة')
     const latitude = hasLat ? Number(rawLat) : null
     const longitude = hasLon ? Number(rawLon) : null
-    if (hasLat && (!Number.isFinite(latitude) || latitude < -90 || latitude > 90 || !Number.isFinite(longitude) || longitude < -180 || longitude > 180)) {
+    if ((hasLat && (!Number.isFinite(latitude) || latitude < -90 || latitude > 90)) ||
+        (hasLon && (!Number.isFinite(longitude) || longitude < -180 || longitude > 180))) {
       return notify('إحداثيات الموقع غير صحيحة؛ تحقق من خط العرض والطول')
+    }
+    if (settings.distance_calculation_enabled && !validCoordinates(latitude, longitude)) {
+      return notify('أدخل إحداثيات صحيحة للمطعم قبل تفعيل حساب المسافة')
     }
     setSavingSettings(true)
     try {
@@ -815,6 +825,7 @@ export default function App() {
     } finally { setSavingSettings(false) }
   }
   const calculateRestaurantDistance = async () => {
+    if (!settings.distance_calculation_enabled) return
     const destination = restaurantCoordinates(settings)
     if (!destination) {
       setDistanceInfo({ kind: 'error', text: 'أضف إحداثيات المطعم من لوحة الإدارة لحساب المسافة بدقة.' })
@@ -975,9 +986,11 @@ export default function App() {
     if (unavailableCartItems().length) return notify('يوجد منتج غير متوفر في السلة. احذفه قبل إرسال الطلب.', 'error')
     if (!settings.whatsapp_enabled) return notify('الطلب عبر واتساب غير متاح حالياً')
     if (!cart.length) return notify('السلة فارغة')
-    const lines = cart.map(x => `• ${x.name} × ${x.quantity} — ${money(x.price*x.quantity, settings.currency)}`)
-    if (extraFeeAmount > 0) lines.push(`• ${extraFeeLabel} — ${money(extraFeeAmount, settings.currency)}`)
-    const message = `طلب جديد من ${settings.restaurant_name}\\n${lines.join('\\n')}\\nالإجمالي: ${money(total, settings.currency)}\\nملاحظات: ${orderNote || 'لا يوجد'}`
+    const lines = cart.map((x, index) =>
+      `${index + 1}) ${x.name}\\nالعدد: ${x.quantity}\\nسعر القطعة: ${money(x.price, settings.currency)}\\nإجمالي الصنف: ${money(x.price * x.quantity, settings.currency)}`
+    )
+    if (extraFeeAmount > 0) lines.push(`${extraFeeLabel}\\nالعدد: 1\\nالقيمة: ${money(extraFeeAmount, settings.currency)}`)
+    const message = `طلب جديد من ${settings.restaurant_name || 'المطعم'}\\n\\nتفاصيل الطلب:\\n${lines.join('\\n\\n')}\\n\\nالمجموع النهائي: ${money(total, settings.currency)}\\nملاحظات: ${orderNote.trim() || 'لا يوجد'}`
     const url = whatsappUrl(settings.whatsapp_number, message)
     if (!url) return notify('أضف رقم واتساب صحيحاً من إعدادات المطعم')
     window.open(url, '_blank', 'noopener,noreferrer')
@@ -1053,8 +1066,8 @@ export default function App() {
     {page==='menu' && <>
       <section className="customer-location-strip" aria-label="موقع المطعم والتواصل">
         <div className="customer-location-actions">
-          {restaurantMapUrl(settings)&&<a className="customer-map-link" href={restaurantMapUrl(settings)} target="_blank" rel="noreferrer"><MapPinned size={15}/> موقع المطعم</a>}
-          <button className="customer-distance-btn" type="button" onClick={calculateRestaurantDistance} disabled={distanceLoading}>{distanceLoading?'جارٍ الحساب...':'احسب المسافة'}</button>
+          {settings.restaurant_location_enabled&&restaurantMapUrl(settings)&&<a className="customer-map-link" href={restaurantMapUrl(settings)} target="_blank" rel="noreferrer"><MapPinned size={15}/> موقع المطعم</a>}
+          {settings.distance_calculation_enabled&&<button className="customer-distance-btn" type="button" onClick={calculateRestaurantDistance} disabled={distanceLoading}>{distanceLoading?'جارٍ الحساب...':'احسب المسافة'}</button>}
           {settings.contact_whatsapp_enabled&&settings.contact_whatsapp_number&&<a className="customer-social-link whatsapp" href={whatsappUrl(settings.contact_whatsapp_number,'مرحباً، أود الاستفسار عن المطعم.')} target="_blank" rel="noreferrer" aria-label="واتساب التواصل"><MessageCircle size={16}/><span>واتساب</span></a>}
           {settings.facebook_enabled&&settings.facebook_url&&<a className="customer-social-link facebook" href={settings.facebook_url} target="_blank" rel="noreferrer" aria-label="صفحة فيسبوك"><Facebook size={16}/><span>Facebook</span></a>}
           {settings.instagram_enabled&&settings.instagram_url&&<a className="customer-social-link instagram" href={settings.instagram_url} target="_blank" rel="noreferrer" aria-label="حساب إنستغرام"><Instagram size={16}/><span>Instagram</span></a>}
@@ -1122,7 +1135,7 @@ export default function App() {
           <div className="panel-title"><ClipboardList/><div><h3>أحدث الطلبات</h3><p>آخر الطلبات المسجلة في النظام</p></div><button className="outline-btn" onClick={()=>setActiveAdminSection('orders')}>عرض الكل</button></div>
           {orders.length ? orders.slice(0,5).map(order=><button className="admin-recent-order" key={order.id} onClick={()=>setActiveAdminSection('orders')}><span className="admin-recent-order-main"><b>طلب #{order.order_number || order.id.slice(0,8)}</b><small>{new Date(order.created_at).toLocaleString('ar', { dateStyle: 'short', timeStyle: 'short' })}{order.table_name ? ` · ${order.table_name}` : ''}</small></span><strong>{money(order.total,settings.currency)}</strong><em className={`order-status status-${order.status || 'unknown'}`}>{orderStatusLabel(order.status)}</em></button>) : <p className="muted admin-no-orders">لا توجد طلبات مسجلة حتى الآن. ستظهر الطلبات الجديدة هنا تلقائياً.</p>}
         </div>
-        <div className="panel-title admin-analytics-heading"><Eye/><div><h3>إحصائيات الزوار</h3><p>آخر 30 يوماً — تُحدّث عند فتح لوحة الإدارة</p></div><button className="outline-btn" onClick={loadAnalytics}>تحديث</button></div>
+        <div className="panel-title admin-analytics-heading"><Eye/><div><h3>إحصائيات الزوار</h3><p>آخر 30 يوماً — تُحدّث عند فتح لوحة الإدارة</p></div><button className="outline-btn admin-refresh-btn" onClick={loadAnalytics} disabled={analyticsLoading} aria-busy={analyticsLoading}>{analyticsLoading?<><span className="refresh-spinner" aria-hidden="true"/>جارٍ التحديث</>:"تحديث"}</button></div>
         {analyticsLoading?<p className="muted">جارٍ تحميل الإحصائيات...</p>:analytics?<>
           <div className="analytics-cards">
             <div className="analytics-card"><small>الزوار الفريدون</small><strong>{analytics.visitors}</strong></div>
@@ -1146,12 +1159,27 @@ export default function App() {
         {settingsTab==='contact'&&<div className="settings-group"><h4>التواصل والروابط الاجتماعية</h4><div className="setting-row"><div><b>الطلب عبر واتساب</b><small>إظهار أو إخفاء زر الطلب عبر واتساب للزبائن</small></div><input type="checkbox" checked={!!settings.whatsapp_enabled} onChange={e=>updateSetting('whatsapp_enabled',e.target.checked)}/></div>{settings.whatsapp_enabled&&<label className="single-field">رقم واتساب الطلبات مع رمز الدولة<input value={settings.whatsapp_number||''} onChange={e=>updateSetting('whatsapp_number',e.target.value)} placeholder="مثال: 33612345678"/></label>}<div className="social-setting"><div className="social-heading"><MessageCircle/><b>واتساب التواصل مع المطعم</b><input type="checkbox" checked={!!settings.contact_whatsapp_enabled} onChange={e=>updateSetting('contact_whatsapp_enabled',e.target.checked)}/></div><small className="muted">رقم مستقل للاستفسارات، لا يغيّر رقم استقبال الطلبات.</small>{settings.contact_whatsapp_enabled&&<input inputMode="tel" value={settings.contact_whatsapp_number||''} onChange={e=>updateSetting('contact_whatsapp_number',e.target.value)} placeholder="رقم واتساب التواصل مع رمز الدولة"/>}</div><div className="social-setting"><div className="social-heading"><Facebook/><b>فيسبوك</b><input type="checkbox" checked={!!settings.facebook_enabled} onChange={e=>updateSetting('facebook_enabled',e.target.checked)}/></div>{settings.facebook_enabled&&<input value={settings.facebook_url||''} onChange={e=>updateSetting('facebook_url',e.target.value)} placeholder="رابط صفحة فيسبوك"/>}</div><div className="social-setting"><div className="social-heading"><Instagram/><b>إنستغرام</b><input type="checkbox" checked={!!settings.instagram_enabled} onChange={e=>updateSetting('instagram_enabled',e.target.checked)}/></div>{settings.instagram_enabled&&<input value={settings.instagram_url||''} onChange={e=>updateSetting('instagram_url',e.target.value)} placeholder="رابط حساب إنستغرام"/>}</div></div>}
         {settingsTab==='alerts'&&<div className="settings-group"><h4>التنبيهات وإدارة الطلبات</h4><div className="setting-row"><div><b>التنبيه الصوتي للطلبات الجديدة</b><small>تشغيل صوت عند وصول طلب جديد إلى لوحة الإدارة</small></div><input type="checkbox" checked={!!settings.order_sound_enabled} onChange={e=>{updateSetting('order_sound_enabled',e.target.checked);if(e.target.checked)playNewOrderSound()}}/></div><div className="setting-row"><div><b>إدارة حالات الطلبات</b><small>إظهار أو إخفاء خيارات تغيير حالة الطلب</small></div><input type="checkbox" checked={settings.order_status_enabled!==false} onChange={e=>updateSetting('order_status_enabled',e.target.checked)}/></div></div>}
         {settingsTab==='location'&&<div className="settings-group">
-          <h4>موقع المطعم وحساب المسافة</h4>
-          <div className="location-coordinates">
-            <label className="single-field">خط العرض<input type="number" step="any" value={settings.restaurant_latitude??''} onChange={e=>{updateSetting('restaurant_latitude',e.target.value);setDistanceInfo(null)}} placeholder="مثال: 33.5138"/></label>
-            <label className="single-field">خط الطول<input type="number" step="any" value={settings.restaurant_longitude??''} onChange={e=>{updateSetting('restaurant_longitude',e.target.value);setDistanceInfo(null)}} placeholder="مثال: 36.2765"/></label>
+          <h4>إعدادات موقع المطعم وحساب المسافة</h4>
+          <div className="location-feature-setting">
+            <div className="setting-row">
+              <div><b>إظهار موقع المطعم</b><small>تفعيل رابط مستقل يفتح موقع المطعم على الخرائط للزبائن</small></div>
+              <input type="checkbox" checked={!!settings.restaurant_location_enabled} onChange={e=>updateSetting('restaurant_location_enabled',e.target.checked)}/>
+            </div>
+            {settings.restaurant_location_enabled&&<label className="single-field">رابط موقع المطعم على الخرائط<input type="url" dir="ltr" value={settings.restaurant_location_url||''} onChange={e=>updateSetting('restaurant_location_url',e.target.value)} placeholder="https://maps.google.com/..."/></label>}
           </div>
-          <small className="muted">أدخل إحداثيات المطعم فقط. تُستخدم لتحديد موقعه وحساب مسافة الطريق للزبائن.</small>
+          <div className="location-feature-setting">
+            <div className="setting-row">
+              <div><b>تفعيل حساب المسافة</b><small>حساب مسافة الطريق بين الزبون والمطعم باستخدام إحداثيات المطعم</small></div>
+              <input type="checkbox" checked={!!settings.distance_calculation_enabled} onChange={e=>{updateSetting('distance_calculation_enabled',e.target.checked);setDistanceInfo(null)}}/>
+            </div>
+            {settings.distance_calculation_enabled&&<>
+              <div className="location-coordinates">
+                <label className="single-field">خط العرض<input type="number" step="any" value={settings.restaurant_latitude??''} onChange={e=>{updateSetting('restaurant_latitude',e.target.value);setDistanceInfo(null)}} placeholder="مثال: 33.5138"/></label>
+                <label className="single-field">خط الطول<input type="number" step="any" value={settings.restaurant_longitude??''} onChange={e=>{updateSetting('restaurant_longitude',e.target.value);setDistanceInfo(null)}} placeholder="مثال: 36.2765"/></label>
+              </div>
+              <small className="muted">هذه الإحداثيات خاصة بحساب المسافة فقط، ولا تعتمد على رابط موقع المطعم.</small>
+            </>}
+          </div>
         </div>}
         {settingsTab==='hours'&&<div className="settings-group">
           <h4>ساعات العمل والعطل</h4>
@@ -1180,14 +1208,14 @@ export default function App() {
         <button className="primary-btn" disabled={savingProduct} aria-busy={savingProduct} onClick={saveProduct}>{savingProduct?'جارٍ الحفظ...':editingProduct?'تحديث المنتج':'إضافة المنتج'}</button>
         <div className="product-admin-list">{products.map(p=><article className="product-admin-card" key={p.id}><div className="product-admin-thumb">{p.image_url?<img src={p.image_url} alt={localized(p,'name')}/>:<UtensilsCrossed size={22}/>}</div><div className="product-admin-details"><b>{localized(p, 'name')}</b><strong>{money(p.price,settings.currency)}</strong><span className={p.is_available===false?'product-availability unavailable':'product-availability'}>{p.is_available===false?'غير متوفر':'متوفر'}</span></div><div className="product-admin-actions"><button className="tiny-btn" onClick={()=>{setEditingProduct(p.id);setProductDraft({...emptyProduct,...p,name_ar:p.name_ar||p.name,description_ar:p.description_ar||p.description,price:String(p.price)})}}>تعديل</button><button className="tiny-btn" disabled={!!updatingProductPublishId||!!updatingProductId} aria-busy={updatingProductPublishId===p.id} title={p.is_published===false?'إظهار المنتج':'إخفاء المنتج'} onClick={()=>toggleProductPublished(p)}>{updatingProductPublishId===p.id?'...':p.is_published===false?<EyeOff size={15}/>:<Eye size={15}/>}</button><button className="tiny-btn danger" onClick={()=>deleteProduct(p.id)}>حذف</button><button className={`availability-toggle ${p.is_available===false?'is-off':''}`} disabled={!!updatingProductId||!!updatingProductPublishId} onClick={()=>toggleProductAvailability(p)}>{updatingProductId===p.id?'...':p.is_available===false?'تفعيل التوفر':'إيقاف التوفر'}</button></div></article>)}</div>
       </section>
-      <section id="orders-panel" className={`admin-panel ${activeAdminSection==='orders'?'admin-panel-active':'admin-panel-hidden'}`}><div className="panel-title"><ClipboardList/><div><h3>إدارة الطلبات</h3><p>طلباتك مرتبة حسب الحالة، مع تحديث سريع من البطاقة مباشرة.</p></div><button className="outline-btn" onClick={loadOrders}>تحديث</button></div>
+      <section id="orders-panel" className={`admin-panel ${activeAdminSection==='orders'?'admin-panel-active':'admin-panel-hidden'}`}><div className="panel-title"><ClipboardList/><div><h3>إدارة الطلبات</h3><p>طلباتك مرتبة حسب الحالة، مع تحديث سريع من البطاقة مباشرة.</p></div><button className="outline-btn admin-refresh-btn" onClick={loadOrders} disabled={ordersLoading} aria-busy={ordersLoading}>{ordersLoading?<><span className="refresh-spinner" aria-hidden="true"/>جارٍ التحديث</>:"تحديث"}</button></div>
         {orders.length ? <div className="orders-status-groups">{[['new','جديدة'],['preparing','قيد التحضير'],['ready','جاهزة'],['completed','مكتملة'],['cancelled','ملغاة']].map(([status,label])=>{const group=orders.filter(order=>(order.status||'new')===status);return <section className={`orders-status-group group-${status}`} key={status}><header><span className={`order-status status-${status}`}>{label}</span><b>{group.length}</b></header>{group.length?group.map(order=><article className="order-card order-management-card" key={order.id}><div className="order-card-heading"><div><b>طلب #{order.order_number || String(order.id).slice(0,8)}{order.table_name ? ` · ${order.table_name}` : ''}</b><small>{new Date(order.created_at).toLocaleString('ar')}</small></div><strong>{money(order.total,settings.currency)}</strong></div><div className="order-items-list">{(order.items||[]).map((item,index)=><span key={`${order.id}-${index}`}>{arabicValue(item.name)||'منتج'} <b>× {item.quantity}</b></span>)}</div>{order.notes&&<p className="order-customer-note">ملاحظة: {order.notes}</p>}{settings.order_status_enabled!==false&&<div className="order-quick-actions">{status==='new'&&<button disabled={updatingOrderId===order.id} onClick={()=>changeOrderStatus(order.id,'preparing')}>قبول وبدء التحضير</button>}{status==='preparing'&&<button disabled={updatingOrderId===order.id} onClick={()=>changeOrderStatus(order.id,'ready')}>تحديد كجاهز</button>}{status==='ready'&&<button disabled={updatingOrderId===order.id} onClick={()=>changeOrderStatus(order.id,'completed')}>إكمال الطلب</button>}{!['completed','cancelled'].includes(status)&&<button className="order-cancel-action" disabled={updatingOrderId===order.id} onClick={()=>setConfirmDialog({title:'تأكيد إلغاء الطلب',message:`هل أنت متأكد من إلغاء الطلب #${order.order_number || String(order.id).slice(0,8)}؟ لن يُلغى الطلب إلا بعد تأكيدك.`,confirmLabel:'نعم، ألغِ الطلب',onConfirm:()=>changeOrderStatus(order.id,'cancelled')})}>إلغاء الطلب</button>}{updatingOrderId===order.id&&<small>جارٍ تحديث الحالة...</small>}</div>}</article>):<p className="orders-group-empty">لا توجد طلبات {label.toLowerCase()} حالياً.</p>}</section>})}</div> : <p className="muted">لا توجد طلبات داخلية حتى الآن.</p>}
       </section>
-      <section id="reviews-panel" className={`admin-panel ${activeAdminSection==='reviews'?'admin-panel-active':'admin-panel-hidden'}`}><div className="panel-title"><Star/><div><h3>تقييمات المنتجات (خاصة بالمدير)</h3><p>لا تظهر التقييمات أو متوسطاتها للزوار</p></div><button className="outline-btn" onClick={loadReviews} disabled={reviewsLoading}>{reviewsLoading ? 'جارٍ التحديث...' : 'تحديث'}</button></div>
+      <section id="reviews-panel" className={`admin-panel ${activeAdminSection==='reviews'?'admin-panel-active':'admin-panel-hidden'}`}><div className="panel-title"><Star/><div><h3>تقييمات المنتجات (خاصة بالمدير)</h3><p>لا تظهر التقييمات أو متوسطاتها للزوار</p></div><button className="outline-btn admin-refresh-btn" onClick={loadReviews} disabled={reviewsLoading} aria-busy={reviewsLoading}>{reviewsLoading?<><span className="refresh-spinner" aria-hidden="true"/>جارٍ التحديث</>:"تحديث"}</button></div>
         {reviews.map(r=><article className="order-card" key={r.product_id}><h4>{localized(products.find(p=>p.id===r.product_id), 'name') || 'منتج'}</h4><b>★ {r.average_rating} / 5 · {r.review_count} تقييم</b>{(r.reviews||[]).map(item=><p key={item.id}>{'★'.repeat(item.rating)} {item.comment || 'دون تعليق'} <small>{new Date(item.created_at).toLocaleString('ar')}</small></p>)}</article>)}
         {!reviews.length&&<p className="muted">لا توجد تقييمات بعد.</p>}
       </section>
-      <section id="qr-panel" className={`admin-panel ${activeAdminSection==='qr'?'admin-panel-active':'admin-panel-hidden'}`}><div className="panel-title"><QrCode/><div><h3>إدارة رموز QR والطاولات</h3><p>الرموز محفوظة في قاعدة البيانات وتبقى ثابتة بعد إغلاق الموقع أو تسجيل الخروج.</p></div><button className="outline-btn" onClick={loadRestaurantTables}>تحديث</button></div>
+      <section id="qr-panel" className={`admin-panel ${activeAdminSection==='qr'?'admin-panel-active':'admin-panel-hidden'}`}><div className="panel-title"><QrCode/><div><h3>إدارة رموز QR والطاولات</h3><p>الرموز محفوظة في قاعدة البيانات وتبقى ثابتة بعد إغلاق الموقع أو تسجيل الخروج.</p></div><button className="outline-btn admin-refresh-btn" onClick={loadRestaurantTables} disabled={tableLoading} aria-busy={tableLoading}>{tableLoading?<><span className="refresh-spinner" aria-hidden="true"/>جارٍ التحديث</>:"تحديث"}</button></div>
         <div className="table-create-row"><input value={tableDraft} onChange={e=>setTableDraft(e.target.value)} placeholder="اسم الطاولة، مثل: طاولة 1"/><button className="primary-btn" onClick={addRestaurantTable}>إضافة طاولة</button></div>
         {tableLoading?<p className="muted">جارٍ تحميل الطاولات...</p>:<div className="restaurant-table-grid">{restaurantTables.map(table=><article className="restaurant-table-card" key={table.id}><h4>{table.is_general?'رمز القائمة العام':table.table_name}</h4><img src={tableQrImages[table.id]||''} alt={`رمز QR ${table.table_name}`}/><small>{table.is_general?'يفتح القائمة دون تحديد طاولة':'يفتح القائمة مع تحديد الطاولة تلقائياً'}</small><div className="table-qr-actions"><a className="outline-btn" href={tableQrImages[table.id]} download="menugo-qr.png">تنزيل</a><button className="outline-btn" onClick={()=>printTableQr(table)}>طباعة</button>{!table.is_general&&<button className="tiny-btn danger" onClick={()=>setConfirmDialog({title:'حذف الطاولة',message:`هل تريد حذف ${table.table_name}؟ سيتوقف رمزها عن العمل.`,onConfirm:()=>deleteRestaurantTable(table)})}>حذف</button>}</div></article>)}</div>}
       </section>

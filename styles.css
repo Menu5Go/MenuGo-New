@@ -1265,3 +1265,69 @@ body {
   }
   .customer-map-link svg, .customer-distance-btn svg, .customer-social-link svg { width: 14px; height: 14px; }
 }
+
+
+/* الدفعة الأولى: إشعارات واضحة أعلى الشاشة */
+.toast {
+  top: 88px;
+  bottom: auto;
+}
+@media (max-width: 600px) {
+  .toast {
+    top: 76px;
+    bottom: auto;
+  }
+}
+
+/* الدفعة الأولى: صف واحد مدمج لأزرار الموقع والتواصل في صفحة الزائر */
+@media (max-width: 650px) {
+  .customer-location-strip {
+    width: 100%;
+    margin: 8px 0 0;
+    padding: 0 8px;
+    overflow: hidden;
+  }
+  .customer-location-actions {
+    display: flex;
+    flex-wrap: nowrap;
+    width: 100%;
+    min-width: 0;
+    gap: 4px;
+  }
+  .customer-map-link,
+  .customer-distance-btn,
+  .customer-social-link {
+    flex: 1 1 0;
+    min-width: 0;
+    min-height: 32px;
+    padding: 5px 3px;
+    gap: 3px;
+    font-size: clamp(8px, 2.45vw, 10px);
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .customer-map-link svg,
+  .customer-distance-btn svg,
+  .customer-social-link svg {
+    width: 12px;
+    height: 12px;
+    flex: 0 0 12px;
+  }
+  .customer-location-actions > a span,
+  .customer-location-actions > button span {
+    overflow: hidden;
+    text-overflow: clip;
+  }
+}
+
+
+/* Refresh feedback for admin data panels */
+.admin-refresh-btn{min-width:112px;justify-content:center;white-space:nowrap}
+.admin-refresh-btn:disabled{opacity:.78;cursor:wait}
+.refresh-spinner{width:15px;height:15px;display:inline-block;flex:none;border:2px solid currentColor;border-left-color:transparent;border-radius:50%;animation:admin-refresh-spin .7s linear infinite}
+@keyframes admin-refresh-spin{to{transform:rotate(360deg)}}
+.location-feature-setting{padding:8px 0 16px;margin:8px 0 14px;border-bottom:1px solid #edf0ed}
+.location-feature-setting:last-child{border-bottom:0}
+.location-feature-setting .setting-row{padding:12px 0}
+.location-feature-setting .single-field{margin:12px 0 4px}
+.location-feature-setting .location-coordinates{margin-top:10px}
