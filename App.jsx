@@ -1152,7 +1152,7 @@ export default function App() {
             <label className="single-field">خط الطول<input type="number" step="any" value={settings.restaurant_longitude??''} onChange={e=>{updateSetting('restaurant_longitude',e.target.value);setDistanceInfo(null)}} placeholder="مثال: 36.2765"/></label>
           </div>
           <small className="muted">أدخل إحداثيات المطعم فقط. تُستخدم لتحديد موقعه وحساب مسافة الطريق للزبائن.</small>
-        </div>
+        </div>}
         {settingsTab==='hours'&&<div className="settings-group">
           <h4>ساعات العمل والعطل</h4>
           <p className="muted">حدد أوقات الدوام لكل يوم، وألغِ التفعيل في أيام العطلة.</p>
@@ -1167,7 +1167,7 @@ export default function App() {
           })}
           <label className="single-field">العطل الاستثنائية (اختياري)<textarea rows="3" value={(settings.restaurant_hours?.holidays||'')} onChange={e=>updateSetting('restaurant_hours',{...(settings.restaurant_hours||{}),holidays:e.target.value})} placeholder="مثال: 2026-12-25 — عطلة رسمية&#10;2026-12-31 — إغلاق مبكر"/></label>
           <small className="muted">اكتب تاريخ كل عطلة وسببها. تُحفظ ضمن إعدادات المطعم.</small>
-        </div>}        </div>}
+        </div>}
         {settingsTab==='system'&&<div className="settings-group"><h4>إعدادات النظام واستقبال الطلبات</h4><div className="setting-row"><div><b>استقبال الطلبات داخل النظام</b><small>حفظ الطلبات في قاعدة البيانات لمتابعة حالتها</small></div><input type="checkbox" checked={!!settings.internal_orders_enabled} onChange={e=>updateSetting('internal_orders_enabled',e.target.checked)}/></div><div className="settings-group extra-fee-settings"><h4>الرسم الإضافي على الطلب</h4><div className="setting-row"><div><b>تفعيل الرسم</b><small>يُضاف الرسم تلقائياً إلى إجمالي الطلب والفاتورة عند انطباق النطاق</small></div><input type="checkbox" checked={!!settings.extra_fee_enabled} onChange={e=>updateSetting('extra_fee_enabled',e.target.checked)}/></div><label className="single-field">نطاق تطبيق الرسم<select value={settings.extra_fee_scope||'all'} onChange={e=>updateSetting('extra_fee_scope',e.target.value)}><option value="all">عام — جميع الطلبات</option><option value="tables">خاص — طلبات QR للطاولات فقط</option></select></label><div className="form-grid"><label>اسم الرسم (اختياري)<input value={settings.extra_fee_name||''} onChange={e=>updateSetting('extra_fee_name',e.target.value)} placeholder="مثال: رسم طاولة"/></label><label>السعر (اختياري)<input type="number" min="0" step="0.01" value={settings.extra_fee_price??''} onChange={e=>updateSetting('extra_fee_price',e.target.value)} placeholder="أدخل السعر"/></label></div><small className="muted">اترك الاسم أو السعر فارغاً إذا لم تكن بحاجة إليه. يُطبّق النطاق الخاص فقط عندما يكون الطلب مرتبطاً بطاولة QR محددة، وليس رمز QR العام.</small></div><p className="muted">يتم تطبيق هذه الخيارات على واجهة المطعم وعمليات استقبال الطلبات.</p></div>}
         <div className="settings-save-row"><span>تذكّر حفظ التغييرات قبل مغادرة الصفحة.</span><button className="primary-btn" disabled={savingSettings} aria-busy={savingSettings} onClick={saveSettings}><Save size={17}/> {savingSettings?'جارٍ الحفظ...':'حفظ الإعدادات'}</button></div>
       </section>
