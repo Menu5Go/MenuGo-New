@@ -1491,3 +1491,84 @@ body {
   .product-edit-modal { padding: 15px; max-height: 90vh; }
   .product-edit-modal .form-grid { grid-template-columns: 1fr; }
 }
+
+/* Final menu card adjustment: two square-image products per row, compact details */
+.product-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+  gap: 10px !important;
+  align-items: stretch;
+}
+.product-grid .product-card {
+  display: flex;
+  flex-direction: column !important;
+  min-width: 0;
+  min-height: 0;
+  height: auto;
+}
+.product-grid .product-image {
+  display: grid;
+  width: 100%;
+  height: auto !important;
+  flex: 0 0 auto;
+  aspect-ratio: 1 / 1 !important;
+  max-height: none;
+  padding: 7px;
+  align-self: auto;
+}
+.product-grid .product-image img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  aspect-ratio: 1 / 1;
+  object-fit: contain !important;
+  object-position: center;
+  background: #f7f8f4;
+  border-radius: 14px;
+}
+.product-grid .product-info {
+  display: flex;
+  flex: 0 0 auto;
+  flex-direction: column;
+  justify-content: flex-start;
+  gap: 4px;
+  min-width: 0;
+  padding: 9px 10px 10px;
+}
+.product-grid .product-info h3 {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.4;
+}
+.product-grid .product-info p {
+  min-height: 0 !important;
+  margin: 1px 0 0;
+  font-size: 10px;
+  line-height: 1.4;
+}
+.product-grid .product-bottom {
+  margin-top: 3px !important;
+  padding-top: 0 !important;
+  gap: 5px;
+}
+.product-grid .review-trigger {
+  align-self: stretch;
+  margin-top: 3px !important;
+  padding: 6px 8px;
+}
+@media (max-width: 600px) {
+  .product-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 9px !important;
+  }
+  .product-grid .product-image {
+    aspect-ratio: 1 / 1 !important;
+    padding: 6px;
+  }
+  .product-grid .product-info {
+    gap: 3px;
+    padding: 8px 8px 9px;
+  }
+  .product-grid .product-info h3 { font-size: 12px; }
+  .product-grid .product-info p { font-size: 10px; }
+  .product-grid .product-bottom { margin-top: 2px !important; }
+}
