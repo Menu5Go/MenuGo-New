@@ -669,6 +669,13 @@ export default function App() {
 
   // حفظ القسم والبحث وموضع التمرير حتى يعود الزائر إلى نفس مكانه بعد تحديث الصفحة.
   useEffect(() => {
+    if (typeof window === 'undefined' || !('scrollRestoration' in window.history)) return
+    const previousRestoration = window.history.scrollRestoration
+    window.history.scrollRestoration = 'manual'
+    return () => { window.history.scrollRestoration = previousRestoration }
+  }, [])
+
+  useEffect(() => {
     if (page !== 'menu') return
     const savePosition = () => {
       try {
@@ -745,11 +752,12 @@ export default function App() {
   // the public menu and dashboard without losing the persisted Supabase session.
 
   const visibleCategories = categories.filter(c => c.is_visible !== false && c.is_published !== false).sort((a,b) => a.sort_order-b.sort_order)
+  const generalCategory = categories.find(c => c.is_general) || categories.find(c => categoryLabel(c) === 'عام') || null
   const shownProducts = useMemo(() => products.filter(p =>
     p.is_published !== false &&
-    (activeCategory === 'all' || p.category_id === activeCategory) &&
+    (activeCategory === 'all' || (activeCategory === '__general__' ? !p.category_id : generalCategory && activeCategory === generalCategory.id ? (!p.category_id || p.category_id === generalCategory.id) : p.category_id === activeCategory)) &&
     (`${localized(p,'name')} ${localized(p,'description')}`).toLowerCase().includes(search.toLowerCase())
-  ), [products, activeCategory, search])
+  ), [products, activeCategory, search, generalCategory])
   const subtotal = cart.reduce((sum, item) => sum + Number(item.price) * item.quantity, 0)
   const extraFeeApplies = Boolean(settings.extra_fee_enabled) &&
     (settings.extra_fee_scope !== 'tables' || Boolean(activeRestaurantTable))
@@ -938,7 +946,7 @@ export default function App() {
       }
     })
   }
-  const openProductForAdminEdit = (product) => {
+  const openProductForAdminEdit = (product, fromMenu = false) => {
     setEditingProduct(product.id)
     setProductDraft({
       ...emptyProduct,
@@ -948,19 +956,21 @@ export default function App() {
       ingredients: product.ingredients || '',
       price: String(product.price ?? '')
     })
-    setActiveAdminSection('products')
-    setPage('admin')
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    if (!fromMenu) {
+      setActiveAdminSection('products')
+      setPage('admin')
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
   }
 
   const saveProduct = async () => {
     if (savingProduct) return
-    if (!productDraft.name_ar.trim() || !productDraft.category_id || productDraft.price === '') return notify('أكمل اسم المنتج والقسم والسعر')
+    if (!productDraft.name_ar.trim() || productDraft.price === '') return notify('أكمل اسم المنتج والسعر')
     if (supabase && typeof navigator !== 'undefined' && navigator.onLine === false) return notify('لا يوجد اتصال بالإنترنت. أعد الاتصال قبل حفظ المنتج.', 'error')
-    const payload = { name: productDraft.name_ar.trim(), name_ar: productDraft.name_ar.trim(), description: productDraft.description_ar || '', description_ar: productDraft.description_ar || '', ingredients: productDraft.ingredients?.trim() || null, price: Number(productDraft.price), category_id: productDraft.category_id, image_url: productDraft.image_url, is_available: productDraft.is_available, is_featured: productDraft.is_featured, is_published: true }
+    const payload = { name: productDraft.name_ar.trim(), name_ar: productDraft.name_ar.trim(), description: productDraft.description_ar || '', description_ar: productDraft.description_ar || '', ingredients: productDraft.ingredients?.trim() || null, price: Number(productDraft.price), category_id: productDraft.category_id || generalCategory?.id || null, image_url: productDraft.image_url, is_available: productDraft.is_available, is_featured: productDraft.is_featured, is_published: true }
     if (supabase) {
       if (editingProduct && !isUuid(editingProduct)) return notify('تعذر تعديل المنتج: معرّف المنتج غير صالح. حدّث الصفحة ثم حاول مجدداً.', 'error')
-      if (!isUuid(productDraft.category_id)) return notify('تعذر حفظ المنتج: اختر قسماً صالحاً من قاعدة البيانات.', 'error')
+      if (productDraft.category_id && !isUuid(productDraft.category_id)) return notify('تعذر حفظ المنتج: اختر قسماً صالحاً من قاعدة البيانات.', 'error')
     }
     setSavingProduct(true)
     try {
@@ -1096,11 +1106,12 @@ export default function App() {
       </section>
       <main id="menu-list" className="content">
         <div className="section-heading"><div><span className="eyebrow">قائمتنا</span><h2>قائمتنا</h2><p>اختر من أشهى الأصناف المحضرة بعناية</p></div><label className="search-box"><Search size={18}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ابحث عن طبق أو مشروب..."/></label></div>
-        <div className="category-tabs"><button className={activeCategory==='all'?'selected':''} onClick={()=>setActiveCategory('all')}>الكل</button>{visibleCategories.map(c=><button key={c.id} className={activeCategory===c.id?'selected':''} onClick={()=>setActiveCategory(c.id)}>{localized(c,'name')}</button>)}</div>
-        <div className="product-grid">{shownProducts.map(p=><article className="product-card" key={p.id} onClick={()=>trackProductView(p.id)}><div className="product-image">{p.image_url?<img src={p.image_url} alt={p.name}/>:<div className="food-placeholder"><UtensilsCrossed size={34}/></div>}{p.is_featured&&<span className="featured">اختيار مميز</span>}{p.is_available===false&&<span className="product-availability unavailable menu-product-unavailable">غير متوفر</span>}</div><div className="product-info"><div><h3>{localized(p,'name')}</h3><p>{localized(p,'description')}</p></div><div className="product-bottom"><strong>{money(p.price,settings.currency)}</strong>{allowedOwner&&isAdminEntry?<button className="add-btn manager-edit-btn" onClick={e=>{e.stopPropagation();openProductForAdminEdit(p)}} aria-label="تعديل المنتج">تعديل</button>:<button className="add-btn" disabled={p.is_available===false} onClick={e=>{e.stopPropagation();addToCart(p)}} aria-label="إضافة المنتج">إضافة</button>}</div><button className="tiny-btn review-trigger" disabled={p.is_available===false} onClick={e=>{e.stopPropagation();if(p.is_available!==false)setReviewDraft({product:p,rating:5,comment:''})}}>قيّم هذا المنتج</button></div></article>)}</div>
+        <div className="category-tabs"><button className={activeCategory==='all'?'selected':''} onClick={()=>setActiveCategory('all')}>الكل</button>{visibleCategories.map(c=><button key={c.id} className={activeCategory===c.id?'selected':''} onClick={()=>setActiveCategory(c.id)}>{localized(c,'name')}</button>)}{!generalCategory && products.some(p=>!p.category_id) && <button className={activeCategory==='__general__'?'selected':''} onClick={()=>setActiveCategory('__general__')}>عام</button>}</div>
+        <div className="product-grid">{shownProducts.map(p=><article className="product-card" key={p.id} onClick={()=>trackProductView(p.id)}><div className="product-image">{p.image_url?<img src={p.image_url} alt={p.name}/>:<div className="food-placeholder"><UtensilsCrossed size={34}/></div>}{p.is_featured&&<span className="featured">اختيار مميز</span>}{p.is_available===false&&<span className="product-availability unavailable menu-product-unavailable">غير متوفر</span>}</div><div className="product-info"><div><h3>{localized(p,'name')}</h3><p>{localized(p,'description')}</p></div><div className="product-bottom"><strong>{money(p.price,settings.currency)}</strong>{allowedOwner&&isAdminEntry?<button className="add-btn manager-edit-btn" onClick={e=>{e.stopPropagation();openProductForAdminEdit(p, true)}} aria-label="تعديل المنتج">تعديل</button>:<button className="add-btn" disabled={p.is_available===false} onClick={e=>{e.stopPropagation();addToCart(p)}} aria-label="إضافة المنتج">إضافة</button>}</div><button className="tiny-btn review-trigger" disabled={p.is_available===false} onClick={e=>{e.stopPropagation();if(p.is_available!==false)setReviewDraft({product:p,rating:5,comment:''})}}>قيّم هذا المنتج</button></div></article>)}</div>
         {!shownProducts.length&&<div className="empty-state">لا توجد منتجات مطابقة حالياً.</div>}
       </main>
       <footer id="restaurant-info" className="footer"><div className="footer-welcome">نسعد بخدمتكم دائماً</div></footer>
+      {allowedOwner && isAdminEntry && editingProduct && <div className="product-edit-overlay" role="dialog" aria-modal="true" aria-label="تعديل بيانات المنتج"><section className="product-edit-modal"><div className="product-edit-modal-head"><h3>تعديل بيانات المنتج</h3><button type="button" className="tiny-btn" onClick={()=>{setEditingProduct(null);setProductDraft(emptyProduct)}} aria-label="إغلاق"><X size={18}/></button></div><div className="form-grid"><label>اسم المنتج<input value={productDraft.name_ar} onChange={e=>setProductDraft({...productDraft,name_ar:e.target.value})}/></label><label>السعر<input type="number" min="0" step="0.01" value={productDraft.price} onChange={e=>setProductDraft({...productDraft,price:e.target.value})}/></label><label>القسم<select value={productDraft.category_id || generalCategory?.id || ''} onChange={e=>setProductDraft({...productDraft,category_id:e.target.value})}><option value={generalCategory?.id || ''}>عام</option>{categories.filter(c=>!c.is_general).map(c=><option key={c.id} value={c.id}>{categoryLabel(c)}</option>)}</select></label><label>صورة المنتج<input type="file" accept="image/png,image/jpeg,image/webp" disabled={uploading} onChange={e=>uploadImage(e.target.files?.[0],url=>setProductDraft(prev=>({...prev,image_url:url})))}/>{productDraft.image_url&&<img className="admin-image-preview" src={productDraft.image_url} alt="معاينة"/>}{uploading&&<small>جارٍ رفع الصورة...</small>}</label><label>الوصف<textarea value={productDraft.description_ar} onChange={e=>setProductDraft({...productDraft,description_ar:e.target.value})}/></label><label>المكونات (اختياري)<textarea value={productDraft.ingredients||''} onChange={e=>setProductDraft({...productDraft,ingredients:e.target.value})} placeholder="اكتب مكونات المنتج أو اترك الحقل فارغاً"/></label></div><div className="check-line"><label><input type="checkbox" checked={!!productDraft.is_available} onChange={e=>setProductDraft({...productDraft,is_available:e.target.checked})}/> متوفر</label><label><input type="checkbox" checked={!!productDraft.is_featured} onChange={e=>setProductDraft({...productDraft,is_featured:e.target.checked})}/> منتج مميز</label></div><div className="product-edit-modal-actions"><button className="outline-btn" onClick={()=>{setEditingProduct(null);setProductDraft(emptyProduct)}}>إلغاء</button><button className="primary-btn" disabled={savingProduct||uploading} aria-busy={savingProduct} onClick={saveProduct}>{savingProduct?'جارٍ الحفظ...':'حفظ التعديلات'}</button></div></section></div>}
     </>}
 
     {page==='cart'&&<main className="content narrow"><div className="section-heading"><div><span className="eyebrow">طلبك</span><h2>سلة الطلبات</h2><p>راجع طلبك قبل الإرسال</p></div><button className="outline-btn" onClick={()=>setPage('menu')}>العودة للقائمة</button></div>
@@ -1219,7 +1230,7 @@ export default function App() {
         {categories.map(c=><div className="manage-row" key={c.id}><span>{categoryLabel(c)}</span><button className="tiny-btn" onClick={()=>{setEditingCategory(c.id);setCategoryDraftAr(categoryLabel(c));}}>تعديل</button><button className="tiny-btn icon-action" onClick={()=>moveCategory(c.id,-1)} title="تحريك لأعلى" aria-label="تحريك لأعلى"><ArrowUp size={16}/></button><button className="tiny-btn icon-action" onClick={()=>moveCategory(c.id,1)} title="تحريك لأسفل" aria-label="تحريك لأسفل"><ArrowDown size={16}/></button><button className="tiny-btn danger" onClick={()=>deleteCategory(c.id)}>حذف</button><button className="tiny-btn" onClick={async()=>{const v=!c.is_visible;if(supabase){const {error}=await supabase.from('categories').update({is_visible:v}).eq('id',c.id);if(error)return notify(error.message)}setCategories(prev=>prev.map(x=>x.id===c.id?{...x,is_visible:v}:x))}}>{c.is_visible===false?<EyeOff size={15}/>:<Eye size={15}/>}</button></div>)}
       </section>
       <section id="products-panel" className={`admin-panel ${activeAdminSection==='products'?'admin-panel-active':'admin-panel-hidden'}`}><div className="panel-title"><UtensilsCrossed/><div><h3>إدارة المنتجات</h3><p>إضافة المنتجات وتعديل الأسعار والتوفر والصور.</p></div></div>
-        <div className="form-grid"><label>اسم المنتج<input value={productDraft.name_ar} onChange={e=>setProductDraft({...productDraft,name_ar:e.target.value})}/></label><label>السعر<input type="number" min="0" step="0.01" value={productDraft.price} onChange={e=>setProductDraft({...productDraft,price:e.target.value})}/></label><label>القسم<select value={productDraft.category_id} onChange={e=>setProductDraft({...productDraft,category_id:e.target.value})}><option value="">اختر القسم</option>{categories.map(c=><option key={c.id} value={c.id}>{categoryLabel(c)}</option>)}</select></label><label>صورة المنتج<input type="file" accept="image/png,image/jpeg,image/webp" disabled={uploading} onChange={e=>uploadImage(e.target.files?.[0],url=>setProductDraft(prev=>({...prev,image_url:url})))}/>{productDraft.image_url&&<img className="admin-image-preview" src={productDraft.image_url} alt="معاينة"/>}{uploading&&<small>جارٍ رفع الصورة...</small>}</label><label>الوصف<textarea value={productDraft.description_ar} onChange={e=>setProductDraft({...productDraft,description_ar:e.target.value})}/></label><label>المكونات (اختياري)<textarea value={productDraft.ingredients||''} onChange={e=>setProductDraft({...productDraft,ingredients:e.target.value})} placeholder="اكتب مكونات المنتج أو اترك الحقل فارغاً"/></label></div>
+        <div className="form-grid"><label>اسم المنتج<input value={productDraft.name_ar} onChange={e=>setProductDraft({...productDraft,name_ar:e.target.value})}/></label><label>السعر<input type="number" min="0" step="0.01" value={productDraft.price} onChange={e=>setProductDraft({...productDraft,price:e.target.value})}/></label><label>القسم<select value={productDraft.category_id || generalCategory?.id || ''} onChange={e=>setProductDraft({...productDraft,category_id:e.target.value})}><option value={generalCategory?.id || ''}>عام</option>{categories.filter(c=>!c.is_general).map(c=><option key={c.id} value={c.id}>{categoryLabel(c)}</option>)}</select></label><label>صورة المنتج<input type="file" accept="image/png,image/jpeg,image/webp" disabled={uploading} onChange={e=>uploadImage(e.target.files?.[0],url=>setProductDraft(prev=>({...prev,image_url:url})))}/>{productDraft.image_url&&<img className="admin-image-preview" src={productDraft.image_url} alt="معاينة"/>}{uploading&&<small>جارٍ رفع الصورة...</small>}</label><label>الوصف<textarea value={productDraft.description_ar} onChange={e=>setProductDraft({...productDraft,description_ar:e.target.value})}/></label><label>المكونات (اختياري)<textarea value={productDraft.ingredients||''} onChange={e=>setProductDraft({...productDraft,ingredients:e.target.value})} placeholder="اكتب مكونات المنتج أو اترك الحقل فارغاً"/></label></div>
         <div className="check-line"><label><input type="checkbox" checked={!!productDraft.is_available} onChange={e=>setProductDraft({...productDraft,is_available:e.target.checked})}/> متوفر</label><label><input type="checkbox" checked={!!productDraft.is_featured} onChange={e=>setProductDraft({...productDraft,is_featured:e.target.checked})}/> منتج مميز</label></div>
         <button className="primary-btn" disabled={savingProduct} aria-busy={savingProduct} onClick={saveProduct}>{savingProduct?'جارٍ الحفظ...':editingProduct?'تحديث المنتج':'إضافة المنتج'}</button>
         <div className="product-admin-list">{products.map(p=><article className="product-admin-card" key={p.id}><div className="product-admin-thumb">{p.image_url?<img src={p.image_url} alt={localized(p,'name')}/>:<UtensilsCrossed size={22}/>}</div><div className="product-admin-details"><b>{localized(p, 'name')}</b><strong>{money(p.price,settings.currency)}</strong><span className={p.is_available===false?'product-availability unavailable':'product-availability'}>{p.is_available===false?'غير متوفر':'متوفر'}</span></div><div className="product-admin-actions"><button className="tiny-btn" onClick={()=>openProductForAdminEdit(p)}>تعديل</button><button className="tiny-btn" disabled={!!updatingProductPublishId||!!updatingProductId} aria-busy={updatingProductPublishId===p.id} title={p.is_published===false?'إظهار المنتج':'إخفاء المنتج'} onClick={()=>toggleProductPublished(p)}>{updatingProductPublishId===p.id?'...':p.is_published===false?<EyeOff size={15}/>:<Eye size={15}/>}</button><button className="tiny-btn danger" onClick={()=>deleteProduct(p.id)}>حذف</button><button className={`availability-toggle ${p.is_available===false?'is-off':''}`} disabled={!!updatingProductId||!!updatingProductPublishId} onClick={()=>toggleProductAvailability(p)}>{updatingProductId===p.id?'...':p.is_available===false?'تفعيل التوفر':'إيقاف التوفر'}</button></div></article>)}</div>
