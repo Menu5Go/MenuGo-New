@@ -1331,3 +1331,77 @@ body {
 .location-feature-setting .setting-row{padding:12px 0}
 .location-feature-setting .single-field{margin:12px 0 4px}
 .location-feature-setting .location-coordinates{margin-top:10px}
+
+/* MenuGo product photo frame: consistent 4:3 food photography crop */
+.product-image {
+  height: auto;
+  aspect-ratio: 4 / 3;
+  max-height: none;
+}
+.product-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: center;
+}
+
+/* MenuGo compact horizontal product cards (menu display only) */
+.product-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+.product-grid .product-card {
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: stretch;
+  min-width: 0;
+  border-radius: 16px;
+}
+.product-grid .product-image {
+  flex: 0 0 112px;
+  width: 112px;
+  height: 112px;
+  aspect-ratio: 1 / 1;
+  max-height: none;
+  padding: 6px;
+}
+.product-grid .product-image img {
+  border-radius: 11px;
+  object-fit: cover;
+}
+.product-grid .product-info {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.product-grid .product-info p {
+  min-height: 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.product-grid .product-bottom {
+  margin-top: 8px;
+}
+.product-grid .review-trigger {
+  align-self: flex-start;
+  margin-top: 6px;
+}
+@media (max-width: 600px) {
+  .product-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+  }
+  .product-grid .product-image {
+    flex-basis: 100px;
+    width: 100px;
+    height: 100px;
+  }
+  .product-grid .product-info {
+    padding: 8px 10px;
+  }
+}
