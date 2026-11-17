@@ -18,6 +18,7 @@ const demoProducts = [
 const initialSettings = {
   restaurant_name: 'مطعم MenuGo', tagline: 'أهلاً وسهلاً بكم', currency: 'SYP',
   extra_fee_enabled: false, extra_fee_scope: 'all', extra_fee_name: '', extra_fee_price: '',
+  table_manual_close_enabled: false, table_auto_close_enabled: false, table_auto_close_minutes: 60,
   whatsapp_enabled: false, whatsapp_number: '', contact_whatsapp_enabled: false, contact_whatsapp_number: '', internal_orders_enabled: false,
   order_sound_enabled: false, order_status_enabled: true,
   facebook_enabled: false, facebook_url: '', instagram_enabled: false, instagram_url: '',
@@ -136,6 +137,8 @@ export default function App() {
   const [categories, setCategories] = useState(() => supabase ? [] : demoCategories)
   const [products, setProducts] = useState(() => supabase ? [] : demoProducts)
   const [cart, setCart] = useState([])
+  const [recentlyAddedProductIds, setRecentlyAddedProductIds] = useState([])
+  const addButtonTimers = useRef(new Map())
   const [activeCategory, setActiveCategory] = useState(() => readSavedMenuPosition()?.activeCategory || 'all')
   const [search, setSearch] = useState(() => readSavedMenuPosition()?.search || '')
   const [menuDataReady, setMenuDataReady] = useState(!supabase)
@@ -179,6 +182,8 @@ export default function App() {
   const [tableDraft, setTableDraft] = useState('')
   const [tableQrImages, setTableQrImages] = useState({})
   const [activeRestaurantTable, setActiveRestaurantTable] = useState(null)
+  const [activeTableSession, setActiveTableSession] = useState(null)
+  const [activeTableSessions, setActiveTableSessions] = useState([])
   const [activeQrIsGeneral, setActiveQrIsGeneral] = useState(false)
   const [tableLoading, setTableLoading] = useState(false)
   const [analytics, setAnalytics] = useState(null)
@@ -200,10 +205,15 @@ export default function App() {
   useEffect(() => {
     const token = new URLSearchParams(window.location.search).get('table')
     if (!token || !supabase) return
-    supabase.rpc('menugo_get_table_by_token', { p_token: token }).then(({ data, error }) => {
+    supabase.rpc('menugo_get_table_by_token', { p_token: token }).then(async ({ data, error }) => {
       if (error || !data) { notify('رمز الطاولة غير صالح أو لم يعد متاحاً'); return }
       setActiveQrIsGeneral(Boolean(data.is_general))
       setActiveRestaurantTable(data.is_general ? null : data)
+      if (!data.is_general) {
+        const { data: tableSession, error: sessionError } = await supabase.rpc('menugo_get_or_open_table_session', { p_table_id: data.id })
+        if (sessionError) { notify(`تعذر فتح جلسة الطاولة: ${sessionError.message}`, 'error'); return }
+        setActiveTableSession(tableSession || null)
+      }
     })
   }, [])
 
@@ -409,6 +419,11 @@ export default function App() {
         return false
       }
       setRestaurantTables(data || [])
+      const { data: sessions, error: sessionsError } = await supabase.rpc('menugo_list_active_table_sessions')
+      if (sessionsError) {
+        notify(`تعذر تحميل جلسات الطاولات: ${sessionsError.message}`, 'error')
+        setActiveTableSessions([])
+      } else setActiveTableSessions(sessions || [])
       const QRCode = (await import('qrcode')).default
       const baseUrl = import.meta.env.VITE_PUBLIC_MENU_URL || new URL(import.meta.env.BASE_URL || '/', window.location.origin).toString()
       const images = {}
@@ -443,6 +458,13 @@ export default function App() {
     await loadRestaurantTables()
     notify('تم حذف الطاولة')
     return true
+  }
+  const closeTableSession = async (sessionId) => {
+    if (!supabase || !allowedOwner) return notify('هذه العملية متاحة للمدير فقط', 'error')
+    const { error } = await supabase.rpc('menugo_close_table_session', { p_session_id: sessionId })
+    if (error) return notify(`تعذر إغلاق جلسة الطاولة: ${error.message}`, 'error')
+    await loadRestaurantTables()
+    notify('تم إغلاق جلسة الطاولة')
   }
   const printTableQr = (table) => {
     const image = tableQrImages[table.id]
@@ -797,11 +819,25 @@ export default function App() {
   const addToCart = (product) => {
     if (!product || product.is_available === false) return
     setCart(prev => {
-    const found = prev.find(x => x.id === product.id)
-    const arabicProduct = { ...product, name: localized(product, 'name'), description: localized(product, 'description') }
-    return found ? prev.map(x => x.id === product.id ? { ...x, quantity: x.quantity + 1 } : x) : [...prev, { ...arabicProduct, quantity: 1 }]
+      const found = prev.find(x => x.id === product.id)
+      const arabicProduct = { ...product, name: localized(product, 'name'), description: localized(product, 'description') }
+      return found ? prev.map(x => x.id === product.id ? { ...x, quantity: x.quantity + 1 } : x) : [...prev, { ...arabicProduct, quantity: 1 }]
     })
+    const productId = String(product.id)
+    const previousTimer = addButtonTimers.current.get(productId)
+    if (previousTimer) window.clearTimeout(previousTimer)
+    setRecentlyAddedProductIds(prev => prev.includes(productId) ? prev : [...prev, productId])
+    const timer = window.setTimeout(() => {
+      setRecentlyAddedProductIds(prev => prev.filter(id => id !== productId))
+      addButtonTimers.current.delete(productId)
+    }, 750)
+    addButtonTimers.current.set(productId, timer)
   }
+
+  useEffect(() => () => {
+    addButtonTimers.current.forEach(timer => window.clearTimeout(timer))
+    addButtonTimers.current.clear()
+  }, [])
   const changeQty = (id, delta) => setCart(prev => prev.map(x => x.id === id ? { ...x, quantity: x.quantity + delta } : x).filter(x => x.quantity > 0))
   const saveSettings = async () => {
     if (savingSettings) return
@@ -1007,19 +1043,32 @@ export default function App() {
     })
   }
   const unavailableCartItems = () => cart.filter(item => products.some(product => product.id === item.id && product.is_available === false))
-  const sendWhatsApp = () => {
+  const sendWhatsApp = async () => {
     if (unavailableCartItems().length) return notify('يوجد منتج غير متوفر في السلة. احذفه قبل إرسال الطلب.', 'error')
     if (!settings.whatsapp_enabled) return notify('الطلب عبر واتساب غير متاح حالياً')
     if (!cart.length) return notify('السلة فارغة')
     const whatsappMoney = value => `${new Intl.NumberFormat('en-US', { maximumFractionDigits: 2 }).format(Number(value || 0))} ليرة`
-    const lines = cart.map((x, index) =>
-      `${index + 1}. ${x.name} × ${x.quantity} = ${whatsappMoney(x.price * x.quantity)}`
-    )
-    if (extraFeeAmount > 0) lines.push(`${extraFeeLabel} = ${whatsappMoney(extraFeeAmount)}`)
-    const message = `طلب جديد من ${settings.restaurant_name || 'المطعم'}\n\n${lines.join('\n')}\n\nالإجمالي النهائي = ${whatsappMoney(total)}\nملاحظات: ${orderNote.trim() || 'لا يوجد'}`
+    const whatsappWindow = window.open('about:blank', '_blank')
+    if (!whatsappWindow) return notify('اسمح بفتح النوافذ المنبثقة لإرسال الطلب عبر واتساب', 'error')
+    let feeForThisOrder = extraFeeAmount
+    let sessionId = activeTableSession?.session_id || activeTableSession?.id || null
+    if (activeRestaurantTable && (settings.table_manual_close_enabled || settings.table_auto_close_enabled)) {
+      const { data: tableSession, error } = await supabase.rpc('menugo_get_or_open_table_session', { p_table_id: activeRestaurantTable.id })
+      if (error || !tableSession) { whatsappWindow.close(); return notify(`تعذر التحقق من جلسة الطاولة: ${error?.message || 'حاول مجدداً'}`, 'error') }
+      sessionId = tableSession.session_id || tableSession.id
+      setActiveTableSession(tableSession)
+      const { data: shouldCharge, error: feeError } = await supabase.rpc('menugo_claim_table_session_fee', { p_session_id: sessionId, p_charge_fee: settings.extra_fee_enabled && settings.extra_fee_scope === 'tables' })
+      if (feeError) { whatsappWindow.close(); return notify(`تعذر تحديث جلسة الطاولة: ${feeError.message}`, 'error') }
+      if (settings.extra_fee_enabled && settings.extra_fee_scope === 'tables') feeForThisOrder = shouldCharge ? Math.max(0, Number(settings.extra_fee_price) || 0) : 0
+    }
+    const orderTotal = subtotal + feeForThisOrder
+    const lines = cart.map((x, index) => `${index + 1}. ${x.name} × ${x.quantity} = ${whatsappMoney(x.price * x.quantity)}`)
+    if (feeForThisOrder > 0) lines.push(`${extraFeeLabel} = ${whatsappMoney(feeForThisOrder)}`)
+    const tableLine = activeRestaurantTable?.table_name ? `\nالطاولة: ${activeRestaurantTable.table_name}` : ''
+    const message = `طلب جديد من ${settings.restaurant_name || 'المطعم'}${tableLine}\n\n${lines.join('\n')}\n\nالإجمالي النهائي = ${whatsappMoney(orderTotal)}\nملاحظات: ${orderNote.trim() || 'لا يوجد'}`
     const url = whatsappUrl(settings.whatsapp_number, message)
-    if (!url) return notify('أضف رقم واتساب صحيحاً من إعدادات المطعم')
-    window.open(url, '_blank', 'noopener,noreferrer')
+    if (!url) { whatsappWindow.close(); return notify('أضف رقم واتساب صحيحاً من إعدادات المطعم') }
+    whatsappWindow.location.href = url
   }
   const submitInternalOrder = async () => {
     if (orderSubmitLock.current) return
@@ -1029,20 +1078,38 @@ export default function App() {
     if (!cart.length) return notify('السلة فارغة')
     if (!supabase) return notify('يلزم ربط Supabase لتسجيل الطلب داخلياً')
     orderSubmitLock.current = true
+    let claimedSessionId = null
+    let feeClaimedByThisOrder = false
+    let feeForThisOrder = extraFeeAmount
     try {
+      if (activeRestaurantTable && (settings.table_manual_close_enabled || settings.table_auto_close_enabled)) {
+        const { data: tableSession, error: sessionError } = await supabase.rpc('menugo_get_or_open_table_session', { p_table_id: activeRestaurantTable.id })
+        if (sessionError || !tableSession) return notify(`تعذر التحقق من جلسة الطاولة: ${sessionError?.message || 'حاول مجدداً'}`, 'error')
+        claimedSessionId = tableSession.session_id || tableSession.id
+        setActiveTableSession(tableSession)
+        const { data: shouldCharge, error: feeError } = await supabase.rpc('menugo_claim_table_session_fee', { p_session_id: claimedSessionId, p_charge_fee: settings.extra_fee_enabled && settings.extra_fee_scope === 'tables' })
+        if (feeError) return notify(`تعذر تحديث جلسة الطاولة: ${feeError.message}`, 'error')
+        feeClaimedByThisOrder = Boolean(shouldCharge)
+        if (settings.extra_fee_enabled && settings.extra_fee_scope === 'tables') feeForThisOrder = shouldCharge ? Math.max(0, Number(settings.extra_fee_price) || 0) : 0
+      }
       let visitorId = localStorage.getItem('menugo_visitor_id')
       if (!visitorId) { visitorId = crypto.randomUUID(); localStorage.setItem('menugo_visitor_id', visitorId) }
+      const orderSubtotal = subtotal
       const { error } = await supabase.from('orders').insert({
         visitor_id: visitorId,
         items: [
           ...cart.map(({id,name,price,quantity}) => ({ product_id:id, name, price, quantity })),
-          ...(extraFeeAmount > 0 ? [{ product_id: null, name: extraFeeLabel, price: extraFeeAmount, quantity: 1, is_extra_fee: true }] : [])
+          ...(feeForThisOrder > 0 ? [{ product_id: null, name: extraFeeLabel, price: feeForThisOrder, quantity: 1, is_extra_fee: true }] : [])
         ],
-        total, notes: orderNote, status: 'new', restaurant_table_id: activeRestaurantTable?.id || null, table_name: activeRestaurantTable?.table_name || null
+        total: orderSubtotal + feeForThisOrder, notes: orderNote, status: 'new', restaurant_table_id: activeRestaurantTable?.id || null, table_name: activeRestaurantTable?.table_name || null
       })
-      if (error) return notify(`تعذر تسجيل الطلب: ${error.message}`)
+      if (error) {
+        if (claimedSessionId && feeClaimedByThisOrder) await supabase.rpc('menugo_release_table_session_fee', { p_session_id: claimedSessionId })
+        return notify(`تعذر تسجيل الطلب: ${error.message}`)
+      }
       setCart([]); setOrderNote(''); notify('تم إرسال الطلب بنجاح')
     } catch (error) {
+      if (claimedSessionId && feeClaimedByThisOrder) await supabase.rpc('menugo_release_table_session_fee', { p_session_id: claimedSessionId })
       notify(`تعذر تسجيل الطلب: ${error.message || 'تحقق من الاتصال وحاول مجدداً'}`, 'error')
     } finally {
       orderSubmitLock.current = false
@@ -1107,7 +1174,7 @@ export default function App() {
       <main id="menu-list" className="content">
         <div className="section-heading"><div><span className="eyebrow">قائمتنا</span><h2>قائمتنا</h2><p>اختر من أشهى الأصناف المحضرة بعناية</p></div><label className="search-box"><Search size={18}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="ابحث عن طبق أو مشروب..."/></label></div>
         <div className="category-tabs"><button className={activeCategory==='all'?'selected':''} onClick={()=>setActiveCategory('all')}>الكل</button>{visibleCategories.map(c=><button key={c.id} className={activeCategory===c.id?'selected':''} onClick={()=>setActiveCategory(c.id)}>{localized(c,'name')}</button>)}{!generalCategory && products.some(p=>!p.category_id) && <button className={activeCategory==='__general__'?'selected':''} onClick={()=>setActiveCategory('__general__')}>عام</button>}</div>
-        <div className="product-grid">{shownProducts.map(p=><article className="product-card" key={p.id} onClick={()=>trackProductView(p.id)}><div className="product-image">{p.image_url?<img src={p.image_url} alt={p.name}/>:<div className="food-placeholder"><UtensilsCrossed size={34}/></div>}{p.is_featured&&<span className="featured">اختيار مميز</span>}{p.is_available===false&&<span className="product-availability unavailable menu-product-unavailable">غير متوفر</span>}</div><div className="product-info"><div><h3>{localized(p,'name')}</h3><p>{localized(p,'description')}</p></div><div className="product-bottom"><strong>{money(p.price,settings.currency)}</strong>{allowedOwner&&isAdminEntry?<button className="add-btn manager-edit-btn" onClick={e=>{e.stopPropagation();openProductForAdminEdit(p, true)}} aria-label="تعديل المنتج">تعديل</button>:<button className="add-btn" disabled={p.is_available===false} onClick={e=>{e.stopPropagation();addToCart(p)}} aria-label="إضافة المنتج">إضافة</button>}</div><button className="tiny-btn review-trigger" disabled={p.is_available===false} onClick={e=>{e.stopPropagation();if(p.is_available!==false)setReviewDraft({product:p,rating:5,comment:''})}}>قيّم هذا المنتج</button></div></article>)}</div>
+        <div className="product-grid">{shownProducts.map(p=><article className="product-card" key={p.id} onClick={()=>trackProductView(p.id)}><div className="product-image">{p.image_url?<img src={p.image_url} alt={p.name}/>:<div className="food-placeholder"><UtensilsCrossed size={34}/></div>}{p.is_featured&&<span className="featured">اختيار مميز</span>}{p.is_available===false&&<span className="product-availability unavailable menu-product-unavailable">غير متوفر</span>}</div><div className="product-info"><div><h3>{localized(p,'name')}</h3><p>{localized(p,'description')}</p></div><div className="product-bottom"><strong>{money(p.price,settings.currency)}</strong>{allowedOwner&&isAdminEntry?<button className="add-btn manager-edit-btn" onClick={e=>{e.stopPropagation();openProductForAdminEdit(p, true)}} aria-label="تعديل المنتج">تعديل</button>:<button className={`add-btn${recentlyAddedProductIds.includes(String(p.id))?' just-added':''}`} disabled={p.is_available===false} onClick={e=>{e.stopPropagation();addToCart(p)}} aria-label="إضافة المنتج">إضافة</button>}</div><button className="tiny-btn review-trigger" disabled={p.is_available===false} onClick={e=>{e.stopPropagation();if(p.is_available!==false)setReviewDraft({product:p,rating:5,comment:''})}}>قيّم هذا المنتج</button></div></article>)}</div>
         {!shownProducts.length&&<div className="empty-state">لا توجد منتجات مطابقة حالياً.</div>}
       </main>
       <footer id="restaurant-info" className="footer"><div className="footer-welcome">نسعد بخدمتكم دائماً</div></footer>
@@ -1223,7 +1290,7 @@ export default function App() {
           <label className="single-field">العطل الاستثنائية (اختياري)<textarea rows="3" value={(settings.restaurant_hours?.holidays||'')} onChange={e=>updateSetting('restaurant_hours',{...(settings.restaurant_hours||{}),holidays:e.target.value})} placeholder="مثال: 2026-12-25 — عطلة رسمية&#10;2026-12-31 — إغلاق مبكر"/></label>
           <small className="muted">اكتب تاريخ كل عطلة وسببها. تُحفظ ضمن إعدادات المطعم.</small>
         </div>}
-        {settingsTab==='system'&&<div className="settings-group"><h4>إعدادات النظام واستقبال الطلبات</h4><div className="setting-row"><div><b>استقبال الطلبات داخل النظام</b><small>حفظ الطلبات في قاعدة البيانات لمتابعة حالتها</small></div><input type="checkbox" checked={!!settings.internal_orders_enabled} onChange={e=>updateSetting('internal_orders_enabled',e.target.checked)}/></div><div className="settings-group extra-fee-settings"><h4>الرسم الإضافي على الطلب</h4><div className="setting-row"><div><b>تفعيل الرسم</b><small>يُضاف الرسم تلقائياً إلى إجمالي الطلب والفاتورة عند انطباق النطاق</small></div><input type="checkbox" checked={!!settings.extra_fee_enabled} onChange={e=>updateSetting('extra_fee_enabled',e.target.checked)}/></div><label className="single-field">نطاق تطبيق الرسم<select value={settings.extra_fee_scope||'all'} onChange={e=>updateSetting('extra_fee_scope',e.target.value)}><option value="all">عام — جميع الطلبات</option><option value="tables">خاص — طلبات QR للطاولات فقط</option></select></label><div className="form-grid"><label>اسم الرسم (اختياري)<input value={settings.extra_fee_name||''} onChange={e=>updateSetting('extra_fee_name',e.target.value)} placeholder="مثال: رسم طاولة"/></label><label>السعر (اختياري)<input type="number" min="0" step="0.01" value={settings.extra_fee_price??''} onChange={e=>updateSetting('extra_fee_price',e.target.value)} placeholder="أدخل السعر"/></label></div><small className="muted">اترك الاسم أو السعر فارغاً إذا لم تكن بحاجة إليه. يُطبّق النطاق الخاص فقط عندما يكون الطلب مرتبطاً بطاولة QR محددة، وليس رمز QR العام.</small></div><p className="muted">يتم تطبيق هذه الخيارات على واجهة المطعم وعمليات استقبال الطلبات.</p></div>}
+        {settingsTab==='system'&&<div className="settings-group"><h4>إعدادات النظام واستقبال الطلبات</h4><div className="setting-row"><div><b>استقبال الطلبات داخل النظام</b><small>حفظ الطلبات في قاعدة البيانات لمتابعة حالتها</small></div><input type="checkbox" checked={!!settings.internal_orders_enabled} onChange={e=>updateSetting('internal_orders_enabled',e.target.checked)}/></div><div className="settings-group extra-fee-settings"><h4>الرسم الإضافي على الطلب</h4><div className="setting-row"><div><b>تفعيل الرسم</b><small>يُضاف الرسم تلقائياً إلى إجمالي الطلب والفاتورة عند انطباق النطاق</small></div><input type="checkbox" checked={!!settings.extra_fee_enabled} onChange={e=>updateSetting('extra_fee_enabled',e.target.checked)}/></div><label className="single-field">نطاق تطبيق الرسم<select value={settings.extra_fee_scope||'all'} onChange={e=>updateSetting('extra_fee_scope',e.target.value)}><option value="all">عام — جميع الطلبات</option><option value="tables">خاص — طلبات QR للطاولات فقط</option></select></label><div className="form-grid"><label>اسم الرسم (اختياري)<input value={settings.extra_fee_name||''} onChange={e=>updateSetting('extra_fee_name',e.target.value)} placeholder="مثال: رسم طاولة"/></label><label>السعر (اختياري)<input type="number" min="0" step="0.01" value={settings.extra_fee_price??''} onChange={e=>updateSetting('extra_fee_price',e.target.value)} placeholder="أدخل السعر"/></label></div><small className="muted">اترك الاسم أو السعر فارغاً إذا لم تكن بحاجة إليه. يُطبّق النطاق الخاص فقط عندما يكون الطلب مرتبطاً بطاولة QR محددة، وليس رمز QR العام.</small></div><div className="settings-group table-session-settings"><h4>إدارة جلسات الطاولات</h4><div className="setting-row"><div><b>الإغلاق اليدوي للطاولة</b><small>إبقاء جلسة الطاولة مفتوحة حتى يغلقها المدير يدوياً. يمكن تشغيله مع الإغلاق التلقائي.</small></div><input type="checkbox" checked={!!settings.table_manual_close_enabled} onChange={e=>updateSetting('table_manual_close_enabled',e.target.checked)}/></div><div className="setting-row"><div><b>الإغلاق التلقائي بعد مدة من عدم النشاط</b><small>تنتهي الجلسة تلقائياً بعد مرور المدة دون طلب جديد.</small></div><input type="checkbox" checked={!!settings.table_auto_close_enabled} onChange={e=>updateSetting('table_auto_close_enabled',e.target.checked)}/></div>{settings.table_auto_close_enabled&&<label className="single-field">مدة عدم النشاط قبل الإغلاق (بالدقائق)<input type="number" min="1" max="10080" step="1" value={settings.table_auto_close_minutes??60} onChange={e=>updateSetting('table_auto_close_minutes',Math.max(1,Math.min(10080,Number(e.target.value)||1)))}/></label>}<small className="muted">يمكن تفعيل الخيارين معاً أو كل واحد على حدة. عند إلغاء الخيارين يعود احتساب الرسم إلى النظام السابق.</small></div><p className="muted">يتم تطبيق هذه الخيارات على واجهة المطعم وعمليات استقبال الطلبات.</p></div>}
         <div className="settings-save-row"><span>تذكّر حفظ التغييرات قبل مغادرة الصفحة.</span><button className="primary-btn" disabled={savingSettings} aria-busy={savingSettings} onClick={saveSettings}><Save size={17}/> {savingSettings?'جارٍ الحفظ...':'حفظ الإعدادات'}</button></div>
       </section>
       <section id="categories-panel" className={`admin-panel ${activeAdminSection==='categories'?'admin-panel-active':'admin-panel-hidden'}`}><div className="panel-title"><Tags/><div><h3>إدارة الأقسام</h3><p>أضف أقساماً غير محددة العدد ورتبها حسب قائمتك.</p></div></div><div className="inline-form"><input value={categoryDraftAr} onChange={e=>setCategoryDraftAr(e.target.value)} placeholder="اسم القسم"/><button className="primary-btn" disabled={savingCategory} aria-busy={savingCategory} onClick={saveCategory}>{savingCategory?'جارٍ الحفظ...':editingCategory?'تحديث القسم':'إضافة قسم'}</button>{editingCategory&&<button className="outline-btn" onClick={()=>{setEditingCategory(null);setCategoryDraftAr('')}}>إلغاء</button>}</div>
@@ -1244,6 +1311,7 @@ export default function App() {
       </section>
       <section id="qr-panel" className={`admin-panel ${activeAdminSection==='qr'?'admin-panel-active':'admin-panel-hidden'}`}><div className="panel-title"><QrCode/><div><h3>إدارة رموز QR والطاولات</h3><p>الرموز محفوظة في قاعدة البيانات وتبقى ثابتة بعد إغلاق الموقع أو تسجيل الخروج.</p></div><button className="outline-btn admin-refresh-btn" onClick={loadRestaurantTables} disabled={tableLoading} aria-busy={tableLoading}>{tableLoading?<><span className="refresh-spinner" aria-hidden="true"/>جارٍ التحديث</>:"تحديث"}</button></div>
         <div className="table-create-row"><input value={tableDraft} onChange={e=>setTableDraft(e.target.value)} placeholder="اسم الطاولة، مثل: طاولة 1"/><button className="primary-btn" onClick={addRestaurantTable}>إضافة طاولة</button></div>
+        {(settings.table_manual_close_enabled||settings.table_auto_close_enabled)&&<div className="active-table-sessions"><h4>جلسات الطاولات المفتوحة</h4>{activeTableSessions.length?activeTableSessions.map(item=><div className="manage-row" key={item.session_id}><span><b>{item.table_name}</b><small>آخر نشاط: {new Date(item.last_activity_at).toLocaleString('ar')}</small></span>{settings.table_manual_close_enabled&&<button className="tiny-btn danger" onClick={()=>closeTableSession(item.session_id)}>إغلاق الجلسة</button>}</div>):<p className="muted">لا توجد جلسات طاولات مفتوحة حالياً.</p>}</div>}
         {tableLoading?<p className="muted">جارٍ تحميل الطاولات...</p>:<div className="restaurant-table-grid">{restaurantTables.map(table=><article className="restaurant-table-card" key={table.id}><h4>{table.is_general?'رمز القائمة العام':table.table_name}</h4><img src={tableQrImages[table.id]||''} alt={`رمز QR ${table.table_name}`}/><small>{table.is_general?'يفتح القائمة دون تحديد طاولة':'يفتح القائمة مع تحديد الطاولة تلقائياً'}</small><div className="table-qr-actions"><a className="outline-btn" href={tableQrImages[table.id]} download="menugo-qr.png">تنزيل</a><button className="outline-btn" onClick={()=>printTableQr(table)}>طباعة</button>{!table.is_general&&<button className="tiny-btn danger" onClick={()=>setConfirmDialog({title:'حذف الطاولة',message:`هل تريد حذف ${table.table_name}؟ سيتوقف رمزها عن العمل.`,onConfirm:()=>deleteRestaurantTable(table)})}>حذف</button>}</div></article>)}</div>}
       </section>
         </div>

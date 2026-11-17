@@ -1572,3 +1572,6 @@ body {
   .product-grid .product-info p { font-size: 10px; }
   .product-grid .product-bottom { margin-top: 2px !important; }
 }
+
+/* تأكيد بصري مؤقت بعد إضافة المنتج، ثم يعود الزر إلى لونه الأخضر تلقائياً. */
+.add-btn.just-added { background: #fff !important; color: var(--brand) !important; border: 1px solid #dce9df; box-shadow: 0 2px 8px rgba(27,71,48,.10); }
