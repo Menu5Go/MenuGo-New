@@ -1574,4 +1574,4 @@ body {
 }
 
 /* تأكيد بصري مؤقت بعد إضافة المنتج، ثم يعود الزر إلى لونه الأخضر تلقائياً. */
-.add-btn.just-added { background: #fff !important; color: var(--brand) !important; border: 1px solid #dce9df; box-shadow: 0 2px 8px rgba(27,71,48,.10); }
+.product-grid .product-bottom .add-btn.just-added:not(:disabled) { background-color: #fff !important; color: #1e4b38 !important; border: 1px solid #c9ddcf !important; opacity: 1 !important; filter: none !important; box-shadow: 0 2px 8px rgba(27,71,48,.10) !important; transform: none !important; }

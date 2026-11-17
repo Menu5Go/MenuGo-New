@@ -784,8 +784,12 @@ export default function App() {
   const extraFeeApplies = Boolean(settings.extra_fee_enabled) &&
     (settings.extra_fee_scope !== 'tables' || Boolean(activeRestaurantTable))
   const extraFeeAmount = extraFeeApplies ? Math.max(0, Number(settings.extra_fee_price) || 0) : 0
+  // عند إدارة جلسات الطاولات، أخفِ الرسم من الملخص بعد احتسابه في الجلسة الحالية.
+  const tableSessionFeeManaged = Boolean(activeRestaurantTable && (settings.table_manual_close_enabled || settings.table_auto_close_enabled))
+  const displayedExtraFeeAmount = tableSessionFeeManaged && activeTableSession?.fee_charged ? 0 : extraFeeAmount
+  const displayedOrderTotal = subtotal + displayedExtraFeeAmount
   const extraFeeLabel = String(settings.extra_fee_name || '').trim() || 'رسم إضافي'
-  const total = subtotal + extraFeeAmount
+  const total = displayedOrderTotal
   const count = cart.reduce((sum, item) => sum + item.quantity, 0)
   const todayKey = new Date().toDateString()
   const localTodayOrders = orders.filter(order => order.created_at && new Date(order.created_at).toDateString() === todayKey)
@@ -1059,6 +1063,7 @@ export default function App() {
       setActiveTableSession(tableSession)
       const { data: shouldCharge, error: feeError } = await supabase.rpc('menugo_claim_table_session_fee', { p_session_id: sessionId, p_charge_fee: settings.extra_fee_enabled && settings.extra_fee_scope === 'tables' })
       if (feeError) { whatsappWindow.close(); return notify(`تعذر تحديث جلسة الطاولة: ${feeError.message}`, 'error') }
+      setActiveTableSession(prev => ({ ...(prev || tableSession), ...tableSession, session_id: sessionId, fee_charged: Boolean(tableSession.fee_charged || shouldCharge) }))
       if (settings.extra_fee_enabled && settings.extra_fee_scope === 'tables') feeForThisOrder = shouldCharge ? Math.max(0, Number(settings.extra_fee_price) || 0) : 0
     }
     const orderTotal = subtotal + feeForThisOrder
@@ -1090,6 +1095,7 @@ export default function App() {
         const { data: shouldCharge, error: feeError } = await supabase.rpc('menugo_claim_table_session_fee', { p_session_id: claimedSessionId, p_charge_fee: settings.extra_fee_enabled && settings.extra_fee_scope === 'tables' })
         if (feeError) return notify(`تعذر تحديث جلسة الطاولة: ${feeError.message}`, 'error')
         feeClaimedByThisOrder = Boolean(shouldCharge)
+        setActiveTableSession(prev => ({ ...(prev || tableSession), ...tableSession, session_id: claimedSessionId, fee_charged: Boolean(tableSession.fee_charged || shouldCharge) }))
         if (settings.extra_fee_enabled && settings.extra_fee_scope === 'tables') feeForThisOrder = shouldCharge ? Math.max(0, Number(settings.extra_fee_price) || 0) : 0
       }
       let visitorId = localStorage.getItem('menugo_visitor_id')
@@ -1183,7 +1189,7 @@ export default function App() {
 
     {page==='cart'&&<main className="content narrow"><div className="section-heading"><div><span className="eyebrow">طلبك</span><h2>سلة الطلبات</h2><p>راجع طلبك قبل الإرسال</p></div><button className="outline-btn" onClick={()=>setPage('menu')}>العودة للقائمة</button></div>
       {!cart.length?<div className="empty-state"><ShoppingCart size={38}/><h3>سلتك فارغة</h3><p>أضف بعض الأصناف اللذيذة من القائمة.</p><button className="primary-btn" onClick={()=>setPage('menu')}>تصفح المينيو</button></div>:<div className="cart-layout"><section className="cart-items">{cart.map(item=><div className="cart-row" key={item.id}><div className="cart-thumb">{item.image_url?<img src={item.image_url} alt={item.name}/>:<UtensilsCrossed size={22}/>}</div><div className="cart-desc"><strong>{item.name}</strong><small>{money(item.price,settings.currency)} للقطعة</small></div><div className="qty"><button onClick={()=>changeQty(item.id,-1)}><Minus size={14}/></button><b>{item.quantity}</b><button onClick={()=>changeQty(item.id,1)}><Plus size={14}/></button></div><strong>{money(item.price*item.quantity,settings.currency)}</strong><button className="remove-btn" onClick={()=>changeQty(item.id,-item.quantity)}><Trash2 size={17}/></button></div>)}
-      <label className="field-label">ملاحظات على الطلب<textarea value={orderNote} onChange={e=>setOrderNote(e.target.value)} placeholder="مثلاً: بدون بصل، أو صوص إضافي..."/></label></section><aside className="summary"><h3>ملخص الطلب</h3>{activeRestaurantTable&&<div><span>الطاولة</span><b>{activeRestaurantTable.table_name}</b></div>}<div><span>عدد الأصناف</span><b>{count}</b></div>{extraFeeAmount>0&&<div><span>{extraFeeLabel}</span><b>{money(extraFeeAmount,settings.currency)}</b></div>}<div className="grand-total"><span>الإجمالي</span><strong>{money(total,settings.currency)}</strong></div>
+      <label className="field-label">ملاحظات على الطلب<textarea value={orderNote} onChange={e=>setOrderNote(e.target.value)} placeholder="مثلاً: بدون بصل، أو صوص إضافي..."/></label></section><aside className="summary"><h3>ملخص الطلب</h3>{activeRestaurantTable&&<div><span>الطاولة</span><b>{activeRestaurantTable.table_name}</b></div>}<div><span>عدد الأصناف</span><b>{count}</b></div>{displayedExtraFeeAmount>0&&<div><span>{extraFeeLabel}</span><b>{money(displayedExtraFeeAmount,settings.currency)}</b></div>}<div className="grand-total"><span>الإجمالي</span><strong>{money(displayedOrderTotal,settings.currency)}</strong></div>
       {settings.whatsapp_enabled&&<button className="whatsapp-btn" onClick={sendWhatsApp}>إرسال الطلب عبر واتساب</button>}
       {settings.internal_orders_enabled&&<button className="primary-btn full" onClick={submitInternalOrder}>تأكيد الطلب</button>}
       {!settings.whatsapp_enabled&&!settings.internal_orders_enabled&&<p className="muted">طرق الطلب غير مفعلة حالياً. يرجى التواصل مع المطعم.</p>}</aside></div>}
