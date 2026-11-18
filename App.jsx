@@ -241,8 +241,13 @@ export default function App() {
     loadOrders()
     loadOrderDashboardStats()
     loadReviews()
-    loadRestaurantTables()
   }, [page, session, products])
+
+  // تحميل بيانات الطاولات ومكتبة QR فقط عند فتح قسم الطاولات، وليس عند فتح لوحة الإدارة.
+  useEffect(() => {
+    if (!supabase || page !== 'admin' || !allowedOwner || activeAdminSection !== 'qr') return
+    loadRestaurantTables()
+  }, [page, session, activeAdminSection])
 
   const trackProductView = (productId) => {
     if (!supabase) return
